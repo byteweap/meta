@@ -1,0 +1,126 @@
+<svg viewBox="0 0 780 700" width="780" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    text { font-family: 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', system-ui, sans-serif; }
+  </style>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="2" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L8,4 L0,8 L2,4 z" fill="#64748b"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="8" markerHeight="8" refX="2" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L8,4 L0,8 L2,4 z" fill="#22c55e"/>
+    </marker>
+    <marker id="arrow-purple" markerWidth="8" markerHeight="8" refX="2" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L8,4 L0,8 L2,4 z" fill="#a855f7"/>
+    </marker>
+  </defs>
+
+  <!-- ======== 底层: 虚线分组容器 ======== -->
+  <!-- Gate 组: x=40, y=164, w=400, h=132 -->
+  <rect x="40" y="164" width="400" height="132" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="6,4"/>
+  <text x="50" y="180" font-size="11" fill="#64748b">Gate 网关层 (server/gate) · 多网关实例</text>
+
+  <!-- Mesh 组: x=40, y=428, w=400, h=140 -->
+  <rect x="40" y="428" width="400" height="140" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="6,4"/>
+  <text x="50" y="444" font-size="11" fill="#64748b">Mesh 业务层 (server/mesh) · 按服务多实例扩展</text>
+
+  <!-- 基础设施面板: x=540, y=164, w=200, h=308 -->
+  <rect x="540" y="164" width="200" height="308" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="6,4"/>
+  <text x="550" y="180" font-size="11" fill="#64748b">基础设施 · component / contrib</text>
+
+  <!-- App 生命周期带: x=40, y=600, w=700, h=52 -->
+  <rect x="40" y="600" width="700" height="52" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="6,4"/>
+  <text x="50" y="615" font-size="11" font-weight="600" fill="#334155">meta.App 应用生命周期 (app.go / option.go) · Gate / Mesh 进程统一托管</text>
+  <text x="50" y="637" font-size="10" fill="#64748b">PreStart → 并发启动 Servers → 注册 Registry → 监听信号 / Stop() → PreStop → 注销实例 → 优雅停止 Servers → PostStop</text>
+
+  <!-- ======== 中层: 连接线与箭头 ======== -->
+  <!-- 客户端 ⇄ 网关 (每客户端一对上下行) -->
+  <path d="M140,137 L140,153" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M150,159 L150,141" fill="none" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <path d="M320,137 L320,153" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M330,159 L330,141" fill="none" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <text x="237" y="152" font-size="10" fill="#64748b" text-anchor="middle">IMessage / OMessage</text>
+
+  <!-- 网关 ⇄ 总线 -->
+  <path d="M140,301 L140,325" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M150,331 L150,307" fill="none" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <path d="M320,301 L320,325" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M330,331 L330,307" fill="none" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <text x="235" y="314" font-size="10" fill="#64748b" text-anchor="middle">Pub 转发 / 事件</text>
+  <text x="235" y="329" font-size="10" fill="#64748b" text-anchor="middle">Sub 回包</text>
+
+  <!-- 总线 ⇄ 业务节点 -->
+  <path d="M130,393 L130,417" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M140,423 L140,399" fill="none" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <path d="M290,393 L290,417" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M300,423 L300,399" fill="none" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <text x="215" y="406" font-size="10" fill="#64748b" text-anchor="middle">Sub 业务 / 事件</text>
+  <text x="215" y="420" font-size="10" fill="#64748b" text-anchor="middle">Pub 回包 / Reply</text>
+
+  <!-- 基础设施 → Gate 层 -->
+  <path d="M535,217 C 520,217 470,205 451,205" fill="none" stroke="#a855f7" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+  <text x="486" y="192" font-size="10" fill="#64748b" text-anchor="end">服务发现</text>
+  <path d="M535,287 C 520,287 470,250 451,250" fill="none" stroke="#a855f7" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+  <text x="486" y="237" font-size="10" fill="#64748b" text-anchor="end">玩家定位</text>
+  <path d="M535,357 C 522,330 475,283 451,283" fill="none" stroke="#a855f7" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+  <text x="486" y="322" font-size="10" fill="#64748b" text-anchor="end">节点选择</text>
+
+  <!-- ======== 顶层: 盒子与文字 ======== -->
+  <!-- 标题 -->
+  <text x="390" y="30" font-size="16" font-weight="700" fill="#1e293b" text-anchor="middle">Meta 架构总览</text>
+  <text x="390" y="48" font-size="10" fill="#64748b" text-anchor="middle">轻量 · 可插拔 · 多节点水平扩展的长连接游戏 / 实时业务 Go 框架</text>
+
+  <!-- 客户端 ×N -->
+  <rect x="85" y="88" width="120" height="44" rx="8" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="145" y="105" font-size="12" font-weight="600" fill="#1e293b" text-anchor="middle">客户端 A</text>
+  <text x="145" y="122" font-size="10" fill="#64748b" text-anchor="middle">WebSocket</text>
+  <text x="235" y="114" font-size="12" fill="#94a3b8" text-anchor="middle">…</text>
+  <rect x="265" y="88" width="120" height="44" rx="8" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="325" y="105" font-size="12" font-weight="600" fill="#1e293b" text-anchor="middle">客户端 B</text>
+  <text x="325" y="122" font-size="10" fill="#64748b" text-anchor="middle">WebSocket</text>
+
+  <!-- Gate 实例 -->
+  <rect x="65" y="190" width="160" height="54" rx="8" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="145" y="211" font-size="11" font-weight="600" fill="#1e40af" text-anchor="middle">Gate · gate-1</text>
+  <text x="145" y="229" font-size="10" fill="#1e40af" text-anchor="middle">接入节点</text>
+  <rect x="245" y="190" width="160" height="54" rx="8" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="325" y="211" font-size="11" font-weight="600" fill="#1e40af" text-anchor="middle">Gate · gate-2</text>
+  <text x="325" y="229" font-size="10" fill="#1e40af" text-anchor="middle">接入节点</text>
+  <text x="420" y="221" font-size="12" fill="#94a3b8" text-anchor="middle">…</text>
+  <text x="240" y="266" font-size="10" fill="#64748b" text-anchor="middle">会话管理 · 单用户单网关 · 消息透传 · 上下线事件</text>
+
+  <!-- Broker 总线 -->
+  <rect x="40" y="336" width="400" height="52" rx="8" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="240" y="356" font-size="12" font-weight="600" fill="#b45309" text-anchor="middle">Broker 消息总线 · NATS</text>
+  <text x="240" y="374" font-size="10" fill="#b45309" text-anchor="middle">subject: &lt;prefix&gt;.&lt;fromApp&gt;.&lt;toApp&gt;.&lt;nodeID&gt;</text>
+
+  <!-- Mesh 实例 -->
+  <rect x="65" y="454" width="140" height="54" rx="8" fill="#d1fae5" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="135" y="475" font-size="11" font-weight="600" fill="#166534" text-anchor="middle">Mesh · game-1</text>
+  <text x="135" y="493" font-size="10" fill="#166534" text-anchor="middle">业务节点</text>
+  <rect x="225" y="454" width="140" height="54" rx="8" fill="#d1fae5" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="295" y="475" font-size="11" font-weight="600" fill="#166534" text-anchor="middle">Mesh · game-2</text>
+  <text x="295" y="493" font-size="10" fill="#166534" text-anchor="middle">业务节点</text>
+  <text x="383" y="485" font-size="12" fill="#94a3b8" text-anchor="middle">…</text>
+  <text x="240" y="530" font-size="10" fill="#64748b" text-anchor="middle">cmd / version 路由 · 事件钩子 · 服务间 RPC</text>
+  <text x="240" y="548" font-size="10" fill="#64748b" text-anchor="middle">Locator 粘性路由：玩家消息直达绑定节点</text>
+
+  <!-- 基础设施面板内容 -->
+  <rect x="550" y="190" width="180" height="54" rx="6" fill="#ffffff" stroke="#a855f7" stroke-width="1.5"/>
+  <text x="640" y="211" font-size="11" font-weight="600" fill="#6b21a8" text-anchor="middle">Registry · 服务注册发现</text>
+  <text x="640" y="229" font-size="10" fill="#64748b" text-anchor="middle">Nacos · Consul · Etcd · ZK …</text>
+
+  <rect x="550" y="260" width="180" height="54" rx="6" fill="#ffffff" stroke="#a855f7" stroke-width="1.5"/>
+  <text x="640" y="281" font-size="11" font-weight="600" fill="#6b21a8" text-anchor="middle">Locator · 玩家位置定位</text>
+  <text x="640" y="299" font-size="10" fill="#64748b" text-anchor="middle">Redis · uid → service → node</text>
+
+  <rect x="550" y="330" width="180" height="54" rx="6" fill="#ffffff" stroke="#a855f7" stroke-width="1.5"/>
+  <text x="640" y="351" font-size="11" font-weight="600" fill="#6b21a8" text-anchor="middle">Selector · 节点选择</text>
+  <text x="640" y="369" font-size="10" fill="#64748b" text-anchor="middle">Random · RoundRobin · WRR</text>
+
+  <rect x="550" y="400" width="180" height="54" rx="6" fill="#ffffff" stroke="#a855f7" stroke-width="1.5"/>
+  <text x="640" y="421" font-size="11" font-weight="600" fill="#6b21a8" text-anchor="middle">Logger · 日志门面</text>
+  <text x="640" y="439" font-size="10" fill="#64748b" text-anchor="middle">Zap · Logrus · Zerolog …</text>
+
+  <!-- 底部支撑层注脚 -->
+  <text x="390" y="678" font-size="10" fill="#94a3b8" text-anchor="middle">支撑层：envelope 协议 (protobuf) · cluster 集群路由 · encoding 编解码 · pkg 工具库 · cmd 脚手架 / examples 示例</text>
+</svg>

@@ -22,29 +22,7 @@ Meta 是一个轻量、可插拔、面向长连接游戏/实时业务的 Go 服�
 
 ## 架构概览
 
-```text
-client
-  |
-  | WebSocket + envelope.IMessage
-  v
-server/gate
-  | 1. 管理 uid -> websocket session
-  | 2. 使用 locator 查找玩家所在服务节点
-  | 3. 使用 registry + selector 选择可用 mesh 节点
-  | 4. 通过 broker 发布消息
-  v
-component/broker
-  |
-  | subject: <prefix>.<fromService>.<toService>.<toNodeID>
-  v
-server/mesh
-  | 1. 订阅自身 subject
-  | 2. 按 cmd/version 路由业务消息
-  | 3. 处理 online/offline/reconnect 系统事件
-  | 4. 回包到 gate reply subject
-  v
-client
-```
+![Meta 架构总览](assets/architecture.svg)
 
 典型部署中，一个应用进程由 `meta.App` 管理生命周期；进程可以挂载一个或多个 `server.Server` 实例。`gate` 负责客户端入口，`mesh` 负责游戏逻辑或其它后端业务能力。服务实例启动后会注册到 `registry.Registry`，网关通过服务发现监听后端节点变化，并使用 `selector.Selector` 选择目标节点。
 

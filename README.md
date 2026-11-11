@@ -84,12 +84,12 @@ type Server interface {
 启动时，Gate 会：
 
 - 从 `meta.Context` 中读取应用 ID 和服务名。
-- 校验必需组件：`Locator`、`Broker`、`Discovery`、`SelectorFunc`。
+- 校验必需组件：`Locator`、`Broker`、`Discovery`、`SelectorFunc`，以及身份验证函数 `UserIDExtractor`。
 - 监听 TCP 地址并生成 `ws://host:port` endpoint。
 - 注册 Melody 的连接、断开、二进制消息、错误和关闭回调。
 - 订阅自己的 broker subject，用来接收 Mesh 回给客户端的消息。
 
-连接建立时，Gate 通过 `UserIDExtractor` 提取 `uid`，默认读取请求参数 `uid`。随后它会：
+WebSocket 握手前，Gate 调用显式配置的 `UserIDExtractor` 验证请求凭据。返回正数表示认证用户 ID，非正数返回 HTTP 401，未配置则启动失败。验证函数每次握手仅调用一次，结果直接传入会话；客户端传入的 `uid` 不会被网关自动采用。连接建立后，Gate 会：
 
 - 关闭同一用户旧连接，保证单用户单网关会话。
 - 在 `Sessions` 中记录 `uid -> *melody.Session`。
@@ -239,7 +239,15 @@ Meta 的核心组件都以接口形式存在：
 
 ### 启动 Gate
 
+下面使用环境变量 `GATE_DEMO_TOKEN` 配置单个演示账户的访问令牌，客户端通过 `Authorization: Bearer <token>` 提交凭据，验证成功后使用用户 ID 1。令牌必须显式设置，无内置默认值。实际业务应在 `UserIDExtractor` 中验证自己的凭据并返回对应用户 ID，不能直接使用请求中的 `uid`。示例需使用标准库 `crypto/subtle`、`net/http` 和 `os`。
+
 ```go
+token := os.Getenv("GATE_DEMO_TOKEN")
+if token == "" {
+    panic("GATE_DEMO_TOKEN is required")
+}
+expectedAuth := []byte("Bearer " + token)
+
 reg := nacos.New(newNamingClient())
 loc := redis.New(goredis.UniversalOptions{
     Addrs: []string{"127.0.0.1:6379"},
@@ -252,6 +260,12 @@ err := meta.New(
     meta.Version("v1.0.0"),
     meta.Server(gate.New(
         gate.Addr(":9000"),
+        gate.UserIDExtractor(func(r *http.Request) int64 {
+            if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), expectedAuth) != 1 {
+                return 0
+            }
+            return 1
+        }),
         gate.Locator(loc),
         gate.Discovery(reg),
         gate.Broker(bro),

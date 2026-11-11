@@ -8,7 +8,6 @@ import (
 	"github.com/byteweap/meta/component/locator"
 	"github.com/byteweap/meta/component/registry"
 	"github.com/byteweap/meta/component/selector"
-	"github.com/byteweap/meta/pkg/conv"
 )
 
 const (
@@ -23,8 +22,8 @@ const (
 	defaultBrokerMessageBufferSize    = 256
 )
 
-// IDExtractor 用户id提取器
-// gate 会在建立连接时调用此函数获取用户id
+// IDExtractor 在 WebSocket 握手前验证请求凭据。
+// 返回认证用户的正数 ID，非正数表示认证失败。
 type IDExtractor func(r *http.Request) int64
 
 // options 选项
@@ -63,9 +62,6 @@ func defaultOptions() *options {
 		maxMessageSize:             defaultMaxMessageSize, // 2k
 		websocketMessageBufferSize: defaultWebsocketMessageBufferSize,
 		brokerMessageBufferSize:    defaultBrokerMessageBufferSize,
-		userIDExtractor: func(r *http.Request) int64 {
-			return conv.Int64(r.FormValue("uid"))
-		},
 	}
 }
 
@@ -160,13 +156,11 @@ func BrokerMessageBufferSize(size int) Option {
 	}
 }
 
-// UserIDExtractor 设置用户 id 提取器
-// gate 会在建立连接时调用此函数获取用户id, 默认: func(r *http.Request) int64 { return conv.Int64(r.FormValue("uid")) }
+// UserIDExtractor 设置必填的身份验证函数，每次握手前调用一次。
+// 验证函数应校验请求凭据并返回用户 ID，不能直接信任客户端提供的用户 ID。
 func UserIDExtractor(extractor IDExtractor) Option {
 	return func(o *options) {
-		if extractor != nil {
-			o.userIDExtractor = extractor
-		}
+		o.userIDExtractor = extractor
 	}
 }
 

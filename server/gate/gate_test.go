@@ -3,6 +3,7 @@ package gate
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -208,6 +209,7 @@ func TestGateValidate(t *testing.T) {
 	require.Error(t, g.validate())
 
 	g = New(
+		UserIDExtractor(func(*http.Request) int64 { return 42 }),
 		Locator(&testLocator{}),
 		Broker(&testBroker{}),
 		Discovery(&testRegistry{}),
@@ -327,6 +329,7 @@ func TestHandleConnectRollsBackSessionWhenBindFails(t *testing.T) {
 	g := New(
 		Addr("127.0.0.1:0"),
 		Path("/ws"),
+		UserIDExtractor(func(*http.Request) int64 { return 42 }),
 		Locator(loc),
 		Broker(&testBroker{}),
 		Discovery(&testRegistry{}),

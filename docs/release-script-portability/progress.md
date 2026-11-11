@@ -3,7 +3,7 @@
 ## 当前状态
 
 - 需求见 [发布脚本版本更新修复](requirements.md)。
-- 当前阶段为实施完成、本地验证和代码审查通过，用户已批准提交。后续阶段为第 3 步方案确认。
+- 第 2 步已提交为 `3c23403`，实施、本地验证和代码审查已完成。第 3 步已获确认，进度见 [网关身份验证](../gate-authentication/progress.md)。
 - 追溯级别为 Level 2。
 - 基线提交为 `ee06aff`。
 - 最后更新为 2026-11-11。
@@ -41,6 +41,6 @@
 
 真实远端发布未执行，原因是本步骤确认的验证方式为临时样例和模拟 Git。文件更新幂等性的证据针对依赖内容；真实标签冲突和远端权限仍由实际发布过程检验。Go 运行时代码测试未运行，本步骤变更仅涉及发布脚本的文本处理。
 
-本步骤共四个待提交文件，包括 [release.sh](../../release.sh)、[需求记录](requirements.md)、本进度记录以及 [第 1 步进度](../module-version-consistency/progress.md)。需求、实现、验收证据和审查状态已同步。
+本步骤共提交四个文件，包括 [release.sh](../../release.sh)、[需求记录](requirements.md)、本进度记录以及 [第 1 步进度](../module-version-consistency/progress.md)。需求、实现、验收证据和审查状态已同步。
 
-用户已批准提交第 2 步，提交说明为 `fix: use POSIX regexes in release script`。提交完成后呈现第 3 步网关身份验证方案，等待用户确认后实施。
+第 2 步已提交为 `3c23403`，提交说明为 `fix: use POSIX regexes in release script`。后续工作从 [第 3 步进度记录](../gate-authentication/progress.md) 继续；第 4 至 16 步待方案确认。

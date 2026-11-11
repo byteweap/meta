@@ -1,8 +1,11 @@
 package main
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"math/rand/v2"
+	"net/http"
+	"os"
 
 	"github.com/nacos-group/nacos-sdk-go/clients"
 	"github.com/nacos-group/nacos-sdk-go/clients/naming_client"
@@ -45,6 +48,12 @@ func newNamingClient() naming_client.INamingClient {
 }
 
 func main() {
+	token := os.Getenv("GATE_DEMO_TOKEN")
+	if token == "" {
+		panic("GATE_DEMO_TOKEN is required")
+	}
+	expectedAuth := []byte("Bearer " + token)
+
 	// 1. nacos注册中心
 	reg := nacos.New(newNamingClient())
 
@@ -68,6 +77,13 @@ func main() {
 		meta.Metadata(map[string]string{"author": "Leo"}),
 		meta.Server(gate.New(
 			gate.Addr(fmt.Sprintf(":%d", rand.IntN(1000)+8000)),
+			// 单账户演示：验证配置的令牌后使用用户 1，实际业务应验证凭据并返回对应用户 ID。
+			gate.UserIDExtractor(func(r *http.Request) int64 {
+				if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), expectedAuth) != 1 {
+					return 0
+				}
+				return 1
+			}),
 			gate.Locator(loc),
 			gate.Discovery(reg),
 			gate.Broker(broker),

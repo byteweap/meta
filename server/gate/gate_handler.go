@@ -14,22 +14,14 @@ import (
 
 // 连接建立时调用
 func (g *Gate) handleConnect(s *melody.Session) {
-	req := s.Request
-
-	uid := g.opts.userIDExtractor(req)
-	if uid <= 0 {
-		_ = s.Write([]byte("uid is required"))
-		_ = s.Close()
-		return
-	}
+	value, _ := s.Get("uid")
+	uid := value.(int64)
 	// 注册会话
 	session, ok := g.sessions.replace(uid, s)
 	if ok {
 		log.Warnf("[websocket] connection exists: uid: %v, close old connection", uid)
 		_ = session.Close()
 	}
-	s.Set("uid", uid)
-
 	log.Infof("[websocket] new connection success, uid: %v, %s", uid, sessionRemoteAddr(s))
 
 	loc := g.opts.locator

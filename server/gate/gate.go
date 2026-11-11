@@ -70,6 +70,9 @@ func (g *Gate) validate() error {
 	if g.opts == nil {
 		return es.ErrOptionsRequired
 	}
+	if g.opts.userIDExtractor == nil {
+		return es.ErrIDExtractorRequired
+	}
 	if g.opts.locator == nil {
 		return es.ErrLocatorRequired
 	}
@@ -117,7 +120,12 @@ func (g *Gate) setup(ctx context.Context, name, appID string) error {
 			http.NotFound(w, r)
 			return
 		}
-		_ = m.HandleRequest(w, r)
+		uid := g.opts.userIDExtractor(r)
+		if uid <= 0 {
+			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+			return
+		}
+		_ = m.HandleRequestWithKeys(w, r, map[string]any{"uid": uid})
 	})
 	g.ws = m
 

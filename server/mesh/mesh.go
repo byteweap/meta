@@ -423,24 +423,13 @@ func (m *Mesh) replyRequestResult(msg *broker.Message, data []byte, tip string, 
 
 // handlerPubSubMessage 来自Gate的(pub-sub)消息
 func (m *Mesh) handlerPubSubMessage(msg *broker.Message) {
-	var (
-		uid   = cluster.GetUIDBy(msg.Header)
-		event = cluster.GetEventBy(msg.Header)
-	)
-
-	switch event {
+	switch cluster.GetEventBy(msg.Header) {
 	case cluster.EventOnline:
-		if m.onlineHandler != nil {
-			m.onlineHandler(uid)
-		}
+		m.handleSessionEvent(msg, m.onlineHandler)
 	case cluster.EventOffline:
-		if m.offlineHandler != nil {
-			m.offlineHandler(uid)
-		}
+		m.handleSessionEvent(msg, m.offlineHandler)
 	case cluster.EventReconnect:
-		if m.reconnectHandler != nil {
-			m.reconnectHandler(uid)
-		}
+		m.handleSessionEvent(msg, m.reconnectHandler)
 	default:
 		e := &envelope.IMessage{}
 		if err := proto.Unmarshal(msg.Data, e); err != nil {
@@ -453,6 +442,30 @@ func (m *Mesh) handlerPubSubMessage(msg *broker.Message) {
 			handler.(MessageHandler)(m, msg, e)
 		}
 	}
+}
+
+// handleSessionEvent 只分发读取时仍与当前会话状态一致的事件。
+// 定位器查询与业务回调不是同一个事务，回调执行期间仍可能发生重连。
+func (m *Mesh) handleSessionEvent(msg *broker.Message, handler func(int64)) {
+	if handler == nil {
+		return
+	}
+	uid := cluster.GetUIDBy(msg.Header)
+	service := cluster.GetFromServiceBy(msg.Header)
+	sessionID := cluster.GetSessionIDBy(msg.Header)
+	if uid <= 0 || service == "" || sessionID == "" {
+		return
+	}
+	current, err := m.opts.locator.Session(m.ctx, uid, service)
+	if err != nil {
+		log.Errorf("mesh session event lookup failed, uid: %v, service: %v, err: %v", uid, service, err)
+		return
+	}
+	online := cluster.GetEventBy(msg.Header) != cluster.EventOffline
+	if current.ID != sessionID || (current.Node != "") != online {
+		return
+	}
+	handler(uid)
 }
 
 // 处理消息

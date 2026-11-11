@@ -89,10 +89,10 @@ type gateAuthLocator struct {
 	bound chan int64
 }
 
-func (l *gateAuthLocator) Bind(ctx context.Context, uid int64, service, node string) error {
-	err := l.testLocator.Bind(ctx, uid, service, node)
+func (l *gateAuthLocator) Claim(ctx context.Context, uid int64, service, node, sessionID string) (bool, error) {
+	replaced, err := l.testLocator.Claim(ctx, uid, service, node, sessionID)
 	l.bound <- uid
-	return err
+	return replaced, err
 }
 
 func TestGateAuthUsesVerifiedIdentityOnce(t *testing.T) {
@@ -130,6 +130,10 @@ func TestGateAuthUsesVerifiedIdentityOnce(t *testing.T) {
 		t.Fatal("authenticated session was not bound")
 	}
 	require.Equal(t, int32(1), calls.Load())
+	require.Eventually(t, func() bool {
+		_, ok := g.sessions.get(42)
+		return ok
+	}, time.Second, time.Millisecond)
 	session, ok := g.sessions.get(42)
 	require.True(t, ok)
 	uid, ok := session.Get("uid")

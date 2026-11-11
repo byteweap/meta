@@ -35,14 +35,14 @@ type shutdownConnectionLocator struct {
 	unbindErr error
 }
 
-func (l *shutdownConnectionLocator) UnBind(ctx context.Context, uid int64, service, node string) error {
-	_ = l.testLocator.UnBind(ctx, uid, service, node)
+func (l *shutdownConnectionLocator) Release(ctx context.Context, uid int64, service, node, sessionID string) (bool, error) {
+	released, _ := l.testLocator.Release(ctx, uid, service, node, sessionID)
 	l.unbinding <- observeShutdownConnectionContext(ctx)
 	select {
 	case <-l.release:
-		return errors.Join(l.unbindErr, ctx.Err())
+		return released, errors.Join(l.unbindErr, ctx.Err())
 	case <-ctx.Done():
-		return ctx.Err()
+		return false, ctx.Err()
 	}
 }
 
@@ -105,11 +105,13 @@ func TestGateShutdownWaitsForDisconnectCleanup(t *testing.T) {
 	for _, tc := range []struct {
 		name                 string
 		disconnectBeforeStop bool
-		cleanupErrors        bool
+		releaseError         bool
+		offlineError         bool
 	}{
 		{name: "cancel before stop"},
 		{name: "disconnect before cancellation", disconnectBeforeStop: true},
-		{name: "shared cleanup errors", cleanupErrors: true},
+		{name: "shared release error", releaseError: true},
+		{name: "shared publication error", offlineError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			release := make(chan struct{})
@@ -122,8 +124,10 @@ func TestGateShutdownWaitsForDisconnectCleanup(t *testing.T) {
 			bro := &shutdownConnectionBroker{
 				online: make(chan struct{}, 1), offline: make(chan shutdownConnectionContext, 4),
 			}
-			if tc.cleanupErrors {
+			if tc.releaseError {
 				loc.unbindErr = errors.New("unbind failed")
+			}
+			if tc.offlineError {
 				bro.offlineErr = errors.New("offline publication failed")
 			}
 			g := newLifecycleGate(bro)
@@ -175,16 +179,19 @@ func TestGateShutdownWaitsForDisconnectCleanup(t *testing.T) {
 			require.Equal(t, int32(1), authentications.Load())
 			unblock()
 			for _, result := range []error{awaitShutdownConnection(t, first), awaitShutdownConnection(t, second), g.Stop(context.Background())} {
-				if tc.cleanupErrors {
+				if tc.releaseError {
 					require.ErrorIs(t, result, loc.unbindErr)
+				} else if tc.offlineError {
 					require.ErrorIs(t, result, bro.offlineErr)
 				} else {
 					require.NoError(t, result)
 				}
 			}
-			offlineState := awaitShutdownConnection(t, bro.offline)
-			require.NoError(t, offlineState.err)
-			require.True(t, offlineState.deadline)
+			if !tc.releaseError {
+				offlineState := awaitShutdownConnection(t, bro.offline)
+				require.NoError(t, offlineState.err)
+				require.True(t, offlineState.deadline)
+			}
 			loc.mu.Lock()
 			binds, unbinds := loc.bindCalls, loc.unbindCalls
 			loc.mu.Unlock()

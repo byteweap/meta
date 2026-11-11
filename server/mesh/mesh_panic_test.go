@@ -10,6 +10,7 @@ import (
 
 	"github.com/byteweap/meta"
 	"github.com/byteweap/meta/component/broker"
+	"github.com/byteweap/meta/component/locator"
 	"github.com/byteweap/meta/envelope"
 	"github.com/byteweap/meta/internal/cluster"
 )
@@ -73,7 +74,14 @@ func TestMeshPanicBusinessAndEventsContinue(t *testing.T) {
 	for _, event := range []cluster.Event{cluster.EventBusiness, cluster.EventOnline, cluster.EventOffline, cluster.EventReconnect} {
 		t.Run(string(event), func(t *testing.T) {
 			bro := &panicBroker{}
-			m := New(Locator(lifecycleLocator{}), Broker(bro))
+			loc := sessionEventLocator{lookup: func(context.Context, int64, string) (locator.Session, error) {
+				state := locator.Session{ID: "current", Node: "gate-1"}
+				if event == cluster.EventOffline {
+					state.Node = ""
+				}
+				return state, nil
+			}}
+			m := New(Locator(loc), Broker(bro))
 			called := make(chan int64, 2)
 			handler := func(uid int64) {
 				called <- uid
@@ -90,7 +98,7 @@ func TestMeshPanicBusinessAndEventsContinue(t *testing.T) {
 			raw := mustBusinessMessage(t, 1, 1, "game", &envelope.Header{})
 			runPanicMesh(t, m)
 			for _, uid := range []int64{1, 2} {
-				bro.handler(&broker.Message{Header: cluster.BuildHeader(uid, event, "", "gate", "game"), Data: raw})
+				bro.handler(&broker.Message{Header: sessionEventHeader(uid, event, "current"), Data: raw})
 			}
 			for _, want := range []int64{1, 2} {
 				select {

@@ -8,11 +8,41 @@ import (
 
 // Sessions 管理所有会话
 type Sessions struct {
-	data sync.Map
+	data  sync.Map
+	mu    sync.Mutex
+	locks map[int64]*sessionLock
+}
+
+type sessionLock struct {
+	mu    sync.Mutex
+	users int
 }
 
 func newSessions() *Sessions {
-	return &Sessions{data: sync.Map{}}
+	return &Sessions{locks: make(map[int64]*sessionLock)}
+}
+
+// lock 将同一用户的远端归属与本地连接切换串行化；空闲锁立即回收。
+// 不能在持有用户锁时递归调用 lock。
+func (ss *Sessions) lock(uid int64) func() {
+	ss.mu.Lock()
+	l := ss.locks[uid]
+	if l == nil {
+		l = &sessionLock{}
+		ss.locks[uid] = l
+	}
+	l.users++
+	ss.mu.Unlock()
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		ss.mu.Lock()
+		l.users--
+		if l.users == 0 {
+			delete(ss.locks, uid)
+		}
+		ss.mu.Unlock()
+	}
 }
 
 // replace 注册新会话并返回旧会话

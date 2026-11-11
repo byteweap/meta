@@ -43,7 +43,7 @@ type options struct {
 	brokerMessageBufferSize    int           // broker 消息缓冲区大小
 
 	// component
-	locator      locator.Locator          // 玩家位置定位器
+	locator      locator.SessionLocator   // 玩家位置和会话归属
 	broker       broker.Broker            // 消息传输代理
 	discovery    registry.Registry        // 服务发现
 	selectorFunc func() selector.Selector // 选择器创建函数
@@ -165,7 +165,7 @@ func UserIDExtractor(extractor IDExtractor) Option {
 }
 
 // Locator 设置玩家位置定位器
-func Locator(locator locator.Locator) Option {
+func Locator(locator locator.SessionLocator) Option {
 	return func(o *options) {
 		if locator != nil {
 			o.locator = locator

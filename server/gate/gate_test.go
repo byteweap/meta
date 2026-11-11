@@ -88,9 +88,15 @@ type testLocator struct {
 	bindCalls   int
 	unbindCalls int
 	nodes       map[string]string
+	sessions    map[testSessionKey]locator.Session
 }
 
-var _ locator.Locator = (*testLocator)(nil)
+type testSessionKey struct {
+	uid     int64
+	service string
+}
+
+var _ locator.SessionLocator = (*testLocator)(nil)
 
 func (l *testLocator) ID() string { return "test-locator" }
 
@@ -123,6 +129,42 @@ func (l *testLocator) UnBind(context.Context, int64, string, string) error {
 }
 
 func (l *testLocator) Close() error { return nil }
+
+func (l *testLocator) Claim(_ context.Context, uid int64, service, node, sessionID string) (bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.bindCalls++
+	if l.bindErr != nil {
+		return false, l.bindErr
+	}
+	if l.sessions == nil {
+		l.sessions = make(map[testSessionKey]locator.Session)
+	}
+	key := testSessionKey{uid, service}
+	replaced := l.sessions[key].Node != ""
+	l.sessions[key] = locator.Session{ID: sessionID, Node: node}
+	return replaced, nil
+}
+
+func (l *testLocator) Release(_ context.Context, uid int64, service, node, sessionID string) (bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.unbindCalls++
+	key := testSessionKey{uid, service}
+	current := l.sessions[key]
+	if current.ID != sessionID || current.Node != node || node == "" {
+		return false, nil
+	}
+	current.Node = ""
+	l.sessions[key] = current
+	return true, nil
+}
+
+func (l *testLocator) Session(_ context.Context, uid int64, service string) (locator.Session, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.sessions[testSessionKey{uid, service}], nil
+}
 
 type testWatcher struct {
 	mu        sync.Mutex
@@ -454,7 +496,7 @@ func TestBroadcastEventContinuesAfterPublishFailure(t *testing.T) {
 	g.appName = "gate"
 	g.appID = "gate-1"
 
-	_ = g.broadcastEvent(g.ctx, 7, cluster.EventOffline)
+	_ = g.broadcastEvent(g.ctx, 7, "session-1", cluster.EventOffline)
 
 	bro.mu.Lock()
 	defer bro.mu.Unlock()

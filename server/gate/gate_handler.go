@@ -1,10 +1,9 @@
 package gate
 
 import (
+	"crypto/rand"
 	"errors"
-	"net/http"
 
-	"github.com/gorilla/websocket"
 	"github.com/olahol/melody"
 
 	"github.com/byteweap/meta/component/log"
@@ -15,6 +14,11 @@ import (
 
 // 连接建立时调用
 func (g *Gate) handleConnect(s *melody.Session) {
+	value, _ := s.Get("uid")
+	uid := value.(int64)
+	unlock := g.sessions.lock(uid)
+	defer unlock()
+
 	g.lifecycleMu.Lock()
 	stopping := g.stopped || g.ctx.Err() != nil
 	g.lifecycleMu.Unlock()
@@ -22,33 +26,27 @@ func (g *Gate) handleConnect(s *melody.Session) {
 		_ = s.WebsocketConnection().Close()
 		return
 	}
-	value, _ := s.Get("uid")
-	uid := value.(int64)
-	// 注册会话
-	session, ok := g.sessions.replace(uid, s)
-	if ok {
-		log.Warnf("[websocket] connection exists: uid: %v, close old connection", uid)
-		_ = session.Close()
+	// 绑定成功后再切换连接，失败的新连接不能破坏原会话。
+	sessionID := rand.Text()
+	replaced, err := g.opts.locator.Claim(g.ctx, uid, g.appName, g.appID, sessionID)
+	if err != nil {
+		log.Errorf("[websocket] new connection bind gate error, uid: %v, err: %v", uid, err)
+		_ = s.WebsocketConnection().Close()
+		return
+	}
+	s.Set(cluster.FieldNameSessionID, sessionID)
+	previous, localReplaced := g.sessions.replace(uid, s)
+	if localReplaced {
+		_ = previous.WebsocketConnection().Close()
 	}
 	log.Infof("[websocket] new connection success, uid: %v, %s", uid, sessionRemoteAddr(s))
 
-	loc := g.opts.locator
-
-	// 绑定网关
-	if err := loc.Bind(g.ctx, uid, g.appName, g.appID); err != nil {
-		log.Errorf("[websocket] new connection bind gate error, uid: %v, err: %v", uid, err)
-		g.sessions.unregisterIfSame(uid, s)
-		_ = s.Write([]byte(http.StatusText(http.StatusInternalServerError)))
-		_ = s.CloseWithMsg(websocket.FormatCloseMessage(melody.CloseInternalServerErr, "bind gate error"))
-		return
-	}
-
 	// 广播 上线、重连 事件到上游服务
 	event := cluster.EventOnline
-	if ok {
+	if replaced {
 		event = cluster.EventReconnect
 	}
-	_ = g.broadcastEvent(g.ctx, uid, event)
+	_ = g.broadcastEvent(g.ctx, uid, sessionID, event)
 }
 
 // 连接断开时调用
@@ -59,6 +57,8 @@ func (g *Gate) handleDisconnect(s *melody.Session) {
 		return
 	}
 	uid := uids.(int64)
+	unlock := g.sessions.lock(uid)
+	defer unlock()
 
 	// 注销会话
 	if !g.sessions.unregisterIfSame(uid, s) {
@@ -71,13 +71,15 @@ func (g *Gate) handleDisconnect(s *melody.Session) {
 	defer cancel()
 
 	// 解绑网关
-	err := g.opts.locator.UnBind(ctx, uid, g.appName, g.appID)
+	value, _ := s.Get(cluster.FieldNameSessionID)
+	sessionID, _ := value.(string)
+	released, err := g.opts.locator.Release(ctx, uid, g.appName, g.appID, sessionID)
 	if err != nil {
 		log.Errorf("[websocket] connection disconnect success, unbind gate error, uid: %v, err: %v", uid, err)
+	} else if released {
+		err = g.broadcastEvent(ctx, uid, sessionID, cluster.EventOffline)
 	}
 
-	// 广播掉线事件到上游服务
-	err = errors.Join(err, g.broadcastEvent(ctx, uid, cluster.EventOffline))
 	g.lifecycleMu.Lock()
 	if g.stopped {
 		g.stopErr = errors.Join(g.stopErr, err)

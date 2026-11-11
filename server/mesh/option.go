@@ -12,10 +12,10 @@ const (
 
 // options 选项
 type options struct {
-	prefix            string          // subject \ redis key 前缀
-	messageBufferSize int             // 消息缓冲区大小
-	locator           locator.Locator // 玩家位置定位器
-	broker            broker.Broker   // 消息传输代理
+	prefix            string                 // subject \ redis key 前缀
+	messageBufferSize int                    // 消息缓冲区大小
+	locator           locator.SessionLocator // 玩家位置与会话定位器
+	broker            broker.Broker          // 消息传输代理
 }
 
 // Option 定义 Mesh 可选配置函数
@@ -48,7 +48,7 @@ func MessageBufferSize(size int) Option {
 }
 
 // Locator 设置玩家位置定位器
-func Locator(locator locator.Locator) Option {
+func Locator(locator locator.SessionLocator) Option {
 	return func(o *options) {
 		if locator != nil {
 			o.locator = locator

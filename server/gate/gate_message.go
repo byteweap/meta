@@ -125,7 +125,7 @@ func (g *Gate) dispatch(uid int64, e *envelope.IMessage) {
 }
 
 // 广播系统事件
-func (g *Gate) broadcastEvent(ctx context.Context, uid int64, event cluster.Event) error {
+func (g *Gate) broadcastEvent(ctx context.Context, uid int64, sessionID string, event cluster.Event) error {
 	// 获取玩家当前所在所有节点
 	snMap, err := g.opts.locator.AllNodes(ctx, uid)
 	if err != nil {
@@ -142,6 +142,7 @@ func (g *Gate) broadcastEvent(ctx context.Context, uid int64, event cluster.Even
 			header  = cluster.BuildHeader(uid, event, g.Subject(service), g.appName, service)
 			subject = cluster.Subject(g.opts.prefix, g.appName, service, node)
 		)
+		header.Set(cluster.FieldNameSessionID, sessionID)
 		if err = g.opts.broker.Pub(ctx, subject, nil, broker.PubHeader(header)); err != nil {
 			result = errors.Join(result, err)
 			log.Errorf("[websocket] broadcast event error, uid: %v, subject: %v, err: %v", uid, subject, err)

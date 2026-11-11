@@ -26,7 +26,7 @@ func (b *lifecycleBroker) Sub(ctx context.Context, _ string, _ broker.Handler, _
 }
 
 // 生命周期测试不发送业务消息，因此不应调用定位器。
-type lifecycleLocator struct{ locator.Locator }
+type lifecycleLocator struct{ locator.SessionLocator }
 
 type lifecycleAppInfo struct{ meta.AppInfo }
 

@@ -55,4 +55,4 @@
 
 实现位于 [停止流程](../../server/gate/gate_shutdown.go)、[任务登记与服务监听](../../server/gate/gate.go)、[连接回调](../../server/gate/gate_handler.go) 和 [事件广播](../../server/gate/gate_message.go)。同步更新 [README](../../README.md)、既有广播测试调用、两组新回归测试和第 5 步进度链接。
 
-需求、决策、实施、验证证据和审查边界已同步，用户已确认提交本步骤，提交说明为 `fix: wait for gate shutdown and preserve disconnect cleanup`。下一项工作为提出第 7 步会话归属方案并等待用户确认；第 7 步尚未实施。
+需求、决策、实施、验证证据和审查边界已同步，用户确认后已提交为 `5a70752`（`fix: wait for gate shutdown and preserve disconnect cleanup`）。用户已确认第 7 步会话归属方案，当前实施与验证见 [第 7 步进度](../session-ownership/progress.md)。

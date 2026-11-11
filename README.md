@@ -100,10 +100,13 @@ type Server interface {
 
 WebSocket 握手前，Gate 调用显式配置的 `UserIDExtractor` 验证请求凭据。返回正数表示认证用户 ID，非正数返回 HTTP 401，未配置则启动失败。验证函数每次握手仅调用一次，结果直接传入会话；客户端传入的 `uid` 不会被网关自动采用。连接建立后，Gate 会：
 
-- 关闭同一用户旧连接，保证单用户单网关会话。
-- 在 `Sessions` 中记录 `uid -> *melody.Session`。
-- 调用 `locator.Bind(ctx, uid, gateName, gateID)` 绑定用户当前网关节点。
-- 向玩家已绑定的业务节点广播 `online` 或 `reconnect` 事件。
+- 为本次连接生成新的会话 ID，调用 `SessionLocator.Claim` 原子绑定用户当前网关及连接身份。
+- 绑定成功后才替换本地会话、关闭同一用户的旧连接；绑定明确失败则关闭新连接，保留旧连接。
+- 向玩家已绑定的业务节点广播带 `session_id` 的 `online` 或 `reconnect` 事件。
+
+同一网关按用户串行处理连接切换和断开，不阻塞其他用户。断开时，`Release` 只有在节点与会话 ID 都匹配时才释放位置；实际释放成功才发送 `offline`。定位器保留最后会话 ID 及离线状态，Mesh 在处理状态事件前校验当前身份和状态，跳过迟到或过期事件。
+
+Gate 和 Mesh 均要求 `locator.SessionLocator`。Redis 定位器的数据格式和状态事件直接更新，不提供历史兼容。跨网关以原子 Claim 的顺序确定归属；本步骤不提供跨网关强制踢线或可靠事件投递。事件校验与业务回调不构成跨系统事务；远端写入成功但响应丢失时，也无法保证失败请求未改变位置。
 
 客户端二进制消息会被解析为 `envelope.IMessage`：
 
@@ -233,7 +236,7 @@ Meta 的核心组件都以接口形式存在：
 
 - `component/broker.Broker`：提供 `Pub/Sub/Request/Reply/Close`，用于服务间消息通信。
 - `component/registry.Registry`：提供 `Register/Deregister/GetService/Watch`，用于服务注册发现。
-- `component/locator.Locator`：维护 `uid -> service -> nodeID`，用于玩家粘性路由和状态事件广播。
+- `component/locator.Locator`：维护 `uid -> service -> nodeID`，用于玩家粘性路由；`SessionLocator` 扩展会话认领、条件释放和最后状态查询，供 Gate/Mesh 处理连接归属和状态事件。
 - `component/selector.Selector`：根据服务实例列表选择目标节点，支持过滤器扩展。
 - `component/log.Logger`：统一日志门面，允许替换为 zap/logrus/zerolog 等实现。
 - `encoding.Codec`：统一编解码器注册和查找，内置 json、proto、msgpack、yaml、toml、xml。

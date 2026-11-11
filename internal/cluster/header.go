@@ -11,6 +11,7 @@ const (
 	FieldNameReply       = "reply"
 	FieldNameFromService = "from_service"
 	FieldNameToService   = "to_service"
+	FieldNameSessionID   = "session_id"
 )
 
 // BuildHeader 构建必备请求头
@@ -47,4 +48,9 @@ func GetFromServiceBy(header broker.Header) string {
 // GetToServiceBy 从请求头中获取目标服务
 func GetToServiceBy(header broker.Header) string {
 	return header.Get(FieldNameToService)
+}
+
+// GetSessionIDBy 返回网关状态事件所属的会话标识。
+func GetSessionIDBy(header broker.Header) string {
+	return header.Get(FieldNameSessionID)
 }

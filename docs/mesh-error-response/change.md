@@ -40,4 +40,4 @@
 
 修复限定于错误提示选择，无范围偏差或新增依赖。验证使用本地消息捕获，不连接真实 Broker；本步骤不修改传输实现。
 
-未新增并发行为，因此不额外重复 race。需求、实现、验证及审查状态已同步，用户已确认提交本步骤，提交说明为 `fix: handle omitted mesh error response tips`。下一项工作为提出第 10 步 Nacos 身份转换方案并等待用户确认；第 10 步尚未实施。
+未新增并发行为，因此不额外重复 race。需求、实现、验证及审查状态已同步，用户确认后已提交为 `8210fc3`（`fix: handle omitted mesh error response tips`）。用户已确认第 10 步 Nacos 身份转换，实施与验证见 [第 10 步进度](../nacos-service-identity/progress.md)。

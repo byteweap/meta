@@ -17,6 +17,7 @@ import (
 
 func newNamingClient() naming_client.INamingClient {
 	clientCfg := constant.ClientConfig{
+		UpdateCacheWhenEmpty: true,
 		//NamespaceId:  "zhaobin",
 		//BeatInterval: 5000,
 	}

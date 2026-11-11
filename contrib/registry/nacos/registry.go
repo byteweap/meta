@@ -14,10 +14,14 @@ import (
 	"github.com/nacos-group/nacos-sdk-go/common/constant"
 	"github.com/nacos-group/nacos-sdk-go/vo"
 
+	"github.com/byteweap/meta/component/log"
 	"github.com/byteweap/meta/component/registry"
 )
 
-var ErrServiceInstanceNameEmpty = errors.New("meta/nacos: ServiceInstance.Name can not be empty")
+var (
+	ErrServiceInstanceNameEmpty = errors.New("meta/nacos: ServiceInstance.Name can not be empty")
+	ErrServiceInstanceIDEmpty   = errors.New("meta/nacos: ServiceInstance.ID can not be empty")
+)
 
 // Registry 是 nacos 注册中心实现
 type Registry struct {
@@ -54,6 +58,9 @@ func (r *Registry) Register(_ context.Context, si *registry.ServiceInstance) err
 	if si.Name == "" {
 		return ErrServiceInstanceNameEmpty
 	}
+	if si.ID == "" {
+		return ErrServiceInstanceIDEmpty
+	}
 	for _, endpoint := range si.Endpoints {
 		u, err := url.Parse(endpoint)
 		if err != nil {
@@ -68,22 +75,17 @@ func (r *Registry) Register(_ context.Context, si *registry.ServiceInstance) err
 			return err
 		}
 		weight := r.opts.weight
-		var rmd map[string]string
-		if si.Metadata == nil {
-			rmd = map[string]string{
-				"kind":    u.Scheme,
-				"version": si.Version,
-			}
-		} else {
-			rmd = maps.Clone(si.Metadata)
-			rmd["kind"] = u.Scheme
-			rmd["version"] = si.Version
-			rmd["id"] = si.ID
-			if w, ok := si.Metadata["weight"]; ok {
-				weight, err = strconv.ParseFloat(w, 64)
-				if err != nil {
-					weight = r.opts.weight
-				}
+		rmd := maps.Clone(si.Metadata)
+		if rmd == nil {
+			rmd = make(map[string]string)
+		}
+		rmd["kind"] = u.Scheme
+		rmd["version"] = si.Version
+		rmd["id"] = si.ID
+		if w, ok := si.Metadata["weight"]; ok {
+			weight, err = strconv.ParseFloat(w, 64)
+			if err != nil {
+				weight = r.opts.weight
 			}
 		}
 		_, e := r.cli.RegisterInstance(vo.RegisterInstanceParam{
@@ -136,39 +138,49 @@ func (r *Registry) Deregister(_ context.Context, service *registry.ServiceInstan
 
 // Watch 按服务名创建 watcher
 func (r *Registry) Watch(ctx context.Context, serviceName string) (registry.Watcher, error) {
-	return newWatcher(ctx, r.cli, serviceName, r.opts.group, r.opts.kind, []string{r.opts.cluster})
+	return newWatcher(ctx, r, serviceName)
 }
 
 // GetService 按服务名获取实例列表
-func (r *Registry) GetService(_ context.Context, serviceName string) ([]*registry.ServiceInstance, error) {
-	res, err := r.cli.SelectInstances(vo.SelectInstancesParam{
+func (r *Registry) GetService(ctx context.Context, serviceName string) ([]*registry.ServiceInstance, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// SelectInstances 将空列表视作错误，使用全量查询后统一筛选可路由节点。
+	res, err := r.cli.SelectAllInstances(vo.SelectAllInstancesParam{
 		ServiceName: serviceName,
 		GroupName:   r.opts.group,
-		HealthyOnly: true,
+		Clusters:    []string{r.opts.cluster},
 	})
 	if err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	items := make([]*registry.ServiceInstance, 0, len(res))
 	for _, in := range res {
-		kind := r.opts.kind
-		weight := r.opts.weight
-		if k, ok := in.Metadata["kind"]; ok {
-			kind = k
+		if !in.Healthy || !in.Enable || !(in.Weight > 0) || math.IsInf(in.Weight, 0) {
+			continue
 		}
-		if in.Weight > 0 {
-			weight = in.Weight
+		id := in.Metadata["id"]
+		if id == "" {
+			log.Warnf("[nacos] skip instance without application ID, service: %s, instance: %s", serviceName, in.InstanceId)
+			continue
 		}
-
-		r := &registry.ServiceInstance{
-			ID:        in.InstanceId,
-			Name:      in.ServiceName,
-			Version:   in.Metadata["version"],
-			Metadata:  in.Metadata,
-			Endpoints: []string{kind + "://" + net.JoinHostPort(in.Ip, strconv.Itoa(int(in.Port)))},
+		metadata := maps.Clone(in.Metadata)
+		kind := metadata["kind"]
+		if kind == "" {
+			kind = r.opts.kind
 		}
-		r.Metadata["weight"] = strconv.FormatInt(int64(math.Ceil(weight)), 10)
-		items = append(items, r)
+		metadata["weight"] = strconv.FormatFloat(math.Ceil(in.Weight), 'f', -1, 64)
+		items = append(items, &registry.ServiceInstance{
+			ID:        id,
+			Name:      serviceName,
+			Version:   metadata["version"],
+			Metadata:  metadata,
+			Endpoints: []string{kind + "://" + net.JoinHostPort(in.Ip, strconv.FormatUint(in.Port, 10))},
+		})
 	}
 	return items, nil
 }

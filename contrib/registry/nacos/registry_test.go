@@ -1,3 +1,5 @@
+//go:build integration
+
 package nacos
 
 import (
@@ -22,13 +24,14 @@ func TestRegistry_Register(t *testing.T) {
 	sc := testServerConfig
 
 	cc := constant.ClientConfig{
-		NamespaceId:         "public", // 命名空间 id
-		TimeoutMs:           5000,
-		NotLoadCacheAtStart: true,
-		LogDir:              "/tmp/nacos/log",
-		CacheDir:            "/tmp/nacos/cache",
-		LogRollingConfig:    &lumberjack.Logger{},
-		LogLevel:            "debug",
+		NamespaceId:          "public", // 命名空间 id
+		TimeoutMs:            5000,
+		NotLoadCacheAtStart:  true,
+		UpdateCacheWhenEmpty: true,
+		LogDir:               "/tmp/nacos/log",
+		CacheDir:             "/tmp/nacos/cache",
+		LogRollingConfig:     &lumberjack.Logger{},
+		LogLevel:             "debug",
 	}
 
 	// 更稳妥的方式创建 naming client
@@ -236,13 +239,14 @@ func TestRegistry_Deregister(t *testing.T) {
 				sc := testServerConfig
 
 				cc := constant.ClientConfig{
-					NamespaceId:         "public", // 命名空间 id
-					TimeoutMs:           5000,
-					NotLoadCacheAtStart: true,
-					LogDir:              "/tmp/nacos/log",
-					CacheDir:            "/tmp/nacos/cache",
-					LogRollingConfig:    &lumberjack.Logger{},
-					LogLevel:            "debug",
+					NamespaceId:          "public", // 命名空间 id
+					TimeoutMs:            5000,
+					NotLoadCacheAtStart:  true,
+					UpdateCacheWhenEmpty: true,
+					LogDir:               "/tmp/nacos/log",
+					CacheDir:             "/tmp/nacos/cache",
+					LogRollingConfig:     &lumberjack.Logger{},
+					LogLevel:             "debug",
 				}
 
 				// 更稳妥的方式创建 naming client
@@ -294,13 +298,14 @@ func TestRegistry_Deregister(t *testing.T) {
 			sc := testServerConfig
 
 			cc := constant.ClientConfig{
-				NamespaceId:         "public", // 命名空间 id
-				TimeoutMs:           5000,
-				NotLoadCacheAtStart: true,
-				LogDir:              "/tmp/nacos/log",
-				CacheDir:            "/tmp/nacos/cache",
-				LogRollingConfig:    &lumberjack.Logger{},
-				LogLevel:            "debug",
+				NamespaceId:          "public", // 命名空间 id
+				TimeoutMs:            5000,
+				NotLoadCacheAtStart:  true,
+				UpdateCacheWhenEmpty: true,
+				LogDir:               "/tmp/nacos/log",
+				CacheDir:             "/tmp/nacos/cache",
+				LogRollingConfig:     &lumberjack.Logger{},
+				LogLevel:             "debug",
 			}
 
 			// 更稳妥的方式创建 naming client
@@ -328,13 +333,14 @@ func TestRegistry_GetService(t *testing.T) {
 	sc := testServerConfig
 
 	cc := constant.ClientConfig{
-		NamespaceId:         "public", // 命名空间 id
-		TimeoutMs:           5000,
-		NotLoadCacheAtStart: true,
-		LogDir:              "/tmp/nacos/log",
-		CacheDir:            "/tmp/nacos/cache",
-		LogRollingConfig:    &lumberjack.Logger{},
-		LogLevel:            "debug",
+		NamespaceId:          "public", // 命名空间 id
+		TimeoutMs:            5000,
+		NotLoadCacheAtStart:  true,
+		UpdateCacheWhenEmpty: true,
+		LogDir:               "/tmp/nacos/log",
+		CacheDir:             "/tmp/nacos/cache",
+		LogRollingConfig:     &lumberjack.Logger{},
+		LogLevel:             "debug",
 	}
 
 	// 更稳妥的方式创建 naming client
@@ -391,19 +397,19 @@ func TestRegistry_GetService(t *testing.T) {
 			},
 			args: args{
 				ctx:         context.Background(),
-				serviceName: testServer.Name + "." + "grpc",
+				serviceName: testServer.Name,
 			},
 			want: []*registry.ServiceInstance{{
-				ID:        "127.0.0.1#8080#DEFAULT#DEFAULT_GROUP@@test3.grpc",
-				Name:      "DEFAULT_GROUP@@test3.grpc",
+				ID:        "1",
+				Name:      testServer.Name,
 				Version:   "v1.0.0",
-				Metadata:  map[string]string{"version": "v1.0.0", "kind": "grpc", "weight": "100"},
+				Metadata:  map[string]string{"id": "1", "version": "v1.0.0", "kind": "grpc", "weight": "100"},
 				Endpoints: []string{"grpc://127.0.0.1:8080"},
 			}},
 			wantErr: false,
 		},
 		{
-			name: "errorNotExist",
+			name: "emptyService",
 			fields: fields{
 				registry: r,
 			},
@@ -411,8 +417,8 @@ func TestRegistry_GetService(t *testing.T) {
 				ctx:         context.Background(),
 				serviceName: "notExist",
 			},
-			want:    nil,
-			wantErr: true,
+			want:    []*registry.ServiceInstance{},
+			wantErr: false,
 		},
 	}
 	for _, tt := range tests {
@@ -441,13 +447,14 @@ func TestRegistry_Watch(t *testing.T) {
 	sc := testServerConfig
 
 	cc := constant.ClientConfig{
-		NamespaceId:         "public", // 命名空间 id
-		TimeoutMs:           5000,
-		NotLoadCacheAtStart: true,
-		LogDir:              "/tmp/nacos/log",
-		CacheDir:            "/tmp/nacos/cache",
-		LogRollingConfig:    &lumberjack.Logger{},
-		LogLevel:            "debug",
+		NamespaceId:          "public", // 命名空间 id
+		TimeoutMs:            5000,
+		NotLoadCacheAtStart:  true,
+		UpdateCacheWhenEmpty: true,
+		LogDir:               "/tmp/nacos/log",
+		CacheDir:             "/tmp/nacos/cache",
+		LogRollingConfig:     &lumberjack.Logger{},
+		LogLevel:             "debug",
 	}
 
 	// 更稳妥的方式创建 naming client
@@ -470,6 +477,7 @@ func TestRegistry_Watch(t *testing.T) {
 	}
 
 	cancelCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	type fields struct {
 		registry *Registry
 	}
@@ -492,21 +500,25 @@ func TestRegistry_Watch(t *testing.T) {
 			},
 			args: args{
 				ctx:         context.Background(),
-				serviceName: testServer.Name + "." + "grpc",
+				serviceName: testServer.Name,
 			},
 			wantErr: false,
 			want: []*registry.ServiceInstance{{
-				ID:        "127.0.0.1#8080#DEFAULT#DEFAULT_GROUP@@test4.grpc",
-				Name:      "DEFAULT_GROUP@@test4.grpc",
+				ID:        "1",
+				Name:      testServer.Name,
 				Version:   "v1.0.0",
-				Metadata:  map[string]string{"version": "v1.0.0", "kind": "grpc"},
+				Metadata:  map[string]string{"id": "1", "version": "v1.0.0", "kind": "grpc", "weight": "100"},
 				Endpoints: []string{"grpc://127.0.0.1:8080"},
 			}},
 			processFunc: func(t *testing.T) {
-				err = r.Register(context.Background(), testServer)
-				if err != nil {
-					t.Error(err)
+				if err := r.Register(context.Background(), testServer); err != nil {
+					t.Fatal(err)
 				}
+				t.Cleanup(func() {
+					if err := r.Deregister(context.Background(), testServer); err != nil {
+						t.Error(err)
+					}
+				})
 			},
 		},
 		{
@@ -528,7 +540,9 @@ func TestRegistry_Watch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := tt.fields.registry
-			watch, err := r.Watch(tt.args.ctx, tt.args.serviceName)
+			ctx, stop := context.WithTimeout(tt.args.ctx, 15*time.Second)
+			defer stop()
+			watch, err := r.Watch(ctx, tt.args.serviceName)
 			if err != nil {
 				t.Error(err)
 				return
@@ -539,23 +553,26 @@ func TestRegistry_Watch(t *testing.T) {
 					t.Error(err)
 				}
 			}()
-			_, err = watch.Next()
-			if err != nil {
-				t.Error(err)
-				return
-			}
-
 			if tt.processFunc != nil {
 				tt.processFunc(t)
 			}
 
-			want, err := watch.Next()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Watch error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if !reflect.DeepEqual(want, tt.want) {
-				t.Errorf("Watch watcher = %v, want %v", watch, tt.want)
+			// Registration propagation may emit an initial empty snapshot before
+			// the registered instance appears. Wait within the watcher deadline.
+			for {
+				got, err := watch.Next()
+				if err != nil {
+					if !tt.wantErr {
+						t.Fatalf("Watch error = %v, last snapshot = %v", err, got)
+					}
+					if !reflect.DeepEqual(got, tt.want) {
+						t.Errorf("Watch snapshot = %v, want %v", got, tt.want)
+					}
+					return
+				}
+				if !tt.wantErr && reflect.DeepEqual(got, tt.want) {
+					return
+				}
 			}
 		})
 	}

@@ -2,6 +2,8 @@ package eureka
 
 import (
 	"context"
+	"errors"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
@@ -34,6 +36,12 @@ func New(eurekaUrls []string, opts ...Option) (*Registry, error) {
 	for _, o := range opts {
 		o(r)
 	}
+	if len(eurekaUrls) == 0 {
+		return nil, errors.New("eureka: at least one server address is required")
+	}
+	if r.heartbeatInterval <= 0 || r.refreshInterval <= 0 {
+		return nil, errors.New("eureka: heartbeat and refresh intervals must be positive")
+	}
 
 	client := NewClient(eurekaUrls,
 		WithHeartbeatInterval(r.heartbeatInterval),
@@ -45,9 +53,8 @@ func New(eurekaUrls []string, opts ...Option) (*Registry, error) {
 }
 
 // Register 注册服务实例
-// 这里的 ctx 只用于当前 Registry 实例
 func (r *Registry) Register(ctx context.Context, service *registry.ServiceInstance) error {
-	return r.api.Register(ctx, service.Name, r.Endpoints(service)...)
+	return r.api.Register(ctx, r.Endpoints(service)...)
 }
 
 // Deregister 从 Eureka 注销服务实例
@@ -57,7 +64,10 @@ func (r *Registry) Deregister(ctx context.Context, service *registry.ServiceInst
 
 // GetService 从 Eureka 获取服务
 func (r *Registry) GetService(ctx context.Context, serviceName string) ([]*registry.ServiceInstance, error) {
-	instances := r.api.GetService(ctx, serviceName)
+	instances, err := r.api.GetService(ctx, serviceName)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]*registry.ServiceInstance, 0, len(instances))
 	for _, instance := range instances {
 		items = append(items, &registry.ServiceInstance{
@@ -74,7 +84,11 @@ func (r *Registry) GetService(ctx context.Context, serviceName string) ([]*regis
 
 // Watch 创建服务监听器，使用独立的 ctx
 func (r *Registry) Watch(ctx context.Context, serviceName string) (registry.Watcher, error) {
-	return newWatch(ctx, r.api, serviceName)
+	w, err := newWatch(ctx, r, serviceName)
+	if err != nil {
+		return nil, err
+	}
+	return w, nil
 }
 
 func (r *Registry) Endpoints(service *registry.ServiceInstance) []Endpoint {
@@ -91,9 +105,9 @@ func (r *Registry) Endpoints(service *registry.ServiceInstance) []Endpoint {
 		statusPageURL := ep + "/info"
 		healthCheckURL := ep + "/health"
 		instanceID := strings.Join([]string{ip, appID, sport}, ":")
-		metadata := make(map[string]string)
-		if len(service.Metadata) > 0 {
-			metadata = service.Metadata
+		metadata := maps.Clone(service.Metadata)
+		if metadata == nil {
+			metadata = make(map[string]string)
 		}
 		if s, ok := service.Metadata["securePort"]; ok {
 			securePort, _ = strconv.Atoi(s)

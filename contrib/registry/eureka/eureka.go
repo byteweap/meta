@@ -2,134 +2,160 @@ package eureka
 
 import (
 	"context"
+	"maps"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/byteweap/meta/component/log"
 )
 
-type subscriber struct {
-	appID    string
-	callBack func()
-}
-
 type API struct {
+	ctx             context.Context
 	cli             *Client
 	allInstances    map[string][]Instance
-	subscribers     map[string]*subscriber
+	lastErr         error
+	subscribers     map[*watcher]struct{}
+	ready           chan struct{}
+	refreshRequest  chan struct{}
 	refreshInterval time.Duration
-	lock            sync.Mutex
+	lock            sync.RWMutex
 }
 
 func NewAPI(ctx context.Context, client *Client, refreshInterval time.Duration) *API {
 	e := &API{
+		ctx:             ctx,
 		cli:             client,
-		allInstances:    make(map[string][]Instance),
-		subscribers:     make(map[string]*subscriber),
+		subscribers:     make(map[*watcher]struct{}),
+		ready:           make(chan struct{}),
+		refreshRequest:  make(chan struct{}, 1),
 		refreshInterval: refreshInterval,
 	}
-
-	// 首次需要广播一次，确保订阅方能拿到初始数据
-	go e.broadcast()
-
-	go e.refresh(ctx)
-
+	go e.refresh()
 	return e
 }
 
-func (e *API) refresh(ctx context.Context) {
+func (e *API) refresh() {
+	e.broadcast()
+	close(e.ready)
 	ticker := time.NewTicker(e.refreshInterval)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-ctx.Done():
+		case <-e.ctx.Done():
 			return
 		case <-ticker.C:
+			e.broadcast()
+		case <-e.refreshRequest:
 			e.broadcast()
 		}
 	}
 }
 
+func (e *API) requestRefresh() {
+	select {
+	case e.refreshRequest <- struct{}{}:
+	default:
+	}
+}
+
 func (e *API) broadcast() {
-	instances := e.cacheAllInstances()
-	if instances == nil {
+	instances, err := e.cli.FetchAllUpInstances(e.ctx)
+	if e.ctx.Err() != nil {
 		return
 	}
-
-	for _, subscriber := range e.subscribers {
-		go subscriber.callBack()
+	var items map[string][]Instance
+	if err == nil {
+		items = make(map[string][]Instance)
+		for _, instance := range instances {
+			appID := e.ToAppID(instance.App)
+			items[appID] = append(items[appID], instance)
+		}
+	} else {
+		log.Warnf("[eureka] refresh failed: %v", err)
 	}
+
 	e.lock.Lock()
-	e.allInstances = instances
-	e.lock.Unlock()
-}
-
-func (e *API) cacheAllInstances() map[string][]Instance {
-	items := make(map[string][]Instance)
-	instances := e.cli.FetchAllUpInstances(context.Background())
-	for _, instance := range instances {
-		items[e.ToAppID(instance.App)] = append(items[instance.App], instance)
+	defer e.lock.Unlock()
+	e.lastErr = err
+	if err == nil {
+		e.allInstances = items
 	}
-
-	return items
-}
-
-func (e *API) Register(ctx context.Context, serviceName string, endpoints ...Endpoint) error {
-	appID := e.ToAppID(serviceName)
-	upInstances := make(map[string]struct{})
-
-	for _, ins := range e.GetService(ctx, appID) {
-		upInstances[ins.InstanceID] = struct{}{}
-	}
-
-	for _, ep := range endpoints {
-		if _, ok := upInstances[ep.InstanceID]; !ok {
-			if err := e.cli.Register(ctx, ep); err != nil {
-				return err
-			}
-			go e.cli.Heartbeat(ep)
+	// 首次失败通知等待者；已有成功快照时保留原状态，等待后续刷新。
+	if err == nil || e.allInstances == nil {
+		for w := range e.subscribers {
+			w.notify()
 		}
 	}
+}
 
+func (e *API) Register(ctx context.Context, endpoints ...Endpoint) error {
+	for _, ep := range endpoints {
+		if err := e.cli.Register(ctx, ep); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-// Deregister 的 ctx 与 Register 保持一致
 func (e *API) Deregister(ctx context.Context, endpoints []Endpoint) error {
 	for _, ep := range endpoints {
 		if err := e.cli.Deregister(ctx, ep.AppID, ep.InstanceID); err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
-func (e *API) Subscribe(serverName string, fn func()) error {
+func (e *API) addWatch(w *watcher) error {
 	e.lock.Lock()
-	appID := e.ToAppID(serverName)
-	e.subscribers[appID] = &subscriber{
-		appID:    appID,
-		callBack: fn,
+	defer e.lock.Unlock()
+	if err := e.ctx.Err(); err != nil {
+		return err
 	}
-	e.lock.Unlock()
-	go e.broadcast()
+	if err := w.ctx.Err(); err != nil {
+		return err
+	}
+	e.subscribers[w] = struct{}{}
+	if e.allInstances != nil {
+		w.notify()
+	}
+	e.requestRefresh()
 	return nil
 }
 
-func (e *API) GetService(ctx context.Context, serverName string) []Instance {
-	appID := e.ToAppID(serverName)
-	if ins, ok := e.allInstances[appID]; ok {
-		return ins
-	}
-
-	// 如果未命中缓存，可再单独拉取一次
-	return e.cli.FetchAppUpInstances(ctx, appID)
+func (e *API) removeWatch(w *watcher) {
+	e.lock.Lock()
+	delete(e.subscribers, w)
+	e.lock.Unlock()
 }
 
-func (e *API) Unsubscribe(serverName string) {
-	e.lock.Lock()
-	delete(e.subscribers, e.ToAppID(serverName))
-	e.lock.Unlock()
+func (e *API) GetService(ctx context.Context, serverName string) ([]Instance, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-e.ctx.Done():
+		return nil, e.ctx.Err()
+	case <-e.ready:
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := e.ctx.Err(); err != nil {
+		return nil, err
+	}
+	e.lock.RLock()
+	defer e.lock.RUnlock()
+	if e.allInstances == nil {
+		return nil, e.lastErr
+	}
+	instances := e.allInstances[e.ToAppID(serverName)]
+	result := make([]Instance, len(instances))
+	for i, instance := range instances {
+		result[i] = instance
+		result[i].Metadata = maps.Clone(instance.Metadata)
+	}
+	return result, nil
 }
 
 func (e *API) ToAppID(serverName string) string {

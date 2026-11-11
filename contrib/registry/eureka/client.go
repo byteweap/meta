@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -87,11 +89,10 @@ var _ APIInterface = (*Client)(nil)
 type APIInterface interface {
 	Register(ctx context.Context, ep Endpoint) error
 	Deregister(ctx context.Context, appID, instanceID string) error
-	Heartbeat(ep Endpoint)
-	FetchApps(ctx context.Context) []Application
-	FetchAllUpInstances(ctx context.Context) []Instance
+	FetchApps(ctx context.Context) ([]Application, error)
+	FetchAllUpInstances(ctx context.Context) ([]Instance, error)
 	FetchAppInstances(ctx context.Context, appID string) (m Application, err error)
-	FetchAppUpInstances(ctx context.Context, appID string) []Instance
+	FetchAppUpInstances(ctx context.Context, appID string) ([]Instance, error)
 	FetchAppInstance(ctx context.Context, appID string, instanceID string) (m Instance, err error)
 	FetchInstance(ctx context.Context, instanceID string) (m Instance, err error)
 	Out(ctx context.Context, appID, instanceID string) error
@@ -125,8 +126,24 @@ type Client struct {
 	maxRetry          int
 	heartbeatInterval time.Duration
 	client            *http.Client
-	keepalive         map[string]chan struct{}
+	registrations     map[instanceKey]*registration
 	lock              sync.Mutex
+}
+
+type instanceKey struct {
+	appID, instanceID string
+}
+
+type registration struct {
+	gate      chan struct{}
+	refs      int
+	heartbeat *heartbeat
+}
+
+type heartbeat struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 var clientTransport = &http.Transport{
@@ -144,12 +161,12 @@ var clientTransport = &http.Transport{
 func NewClient(urls []string, opts ...ClientOption) *Client {
 	e := &Client{
 		ctx:               context.Background(),
-		urls:              urls,
+		urls:              slices.Clone(urls),
 		eurekaPath:        "eureka/v2",
 		maxRetry:          len(urls),
 		heartbeatInterval: heartbeatTime,
 		client:            &http.Client{Transport: clientTransport, Timeout: httpTimeout},
-		keepalive:         make(map[string]chan struct{}),
+		registrations:     make(map[instanceKey]*registration),
 	}
 
 	for _, o := range opts {
@@ -159,13 +176,13 @@ func NewClient(urls []string, opts ...ClientOption) *Client {
 	return e
 }
 
-func (e *Client) FetchApps(ctx context.Context) []Application {
+func (e *Client) FetchApps(ctx context.Context) ([]Application, error) {
 	var m ApplicationsRootResponse
 	if err := e.do(ctx, http.MethodGet, []string{"apps"}, nil, &m); err != nil {
-		return nil
+		return nil, err
 	}
 
-	return m.Applications
+	return m.Applications, nil
 }
 
 func (e *Client) FetchAppInstances(ctx context.Context, appID string) (m Application, err error) {
@@ -173,12 +190,12 @@ func (e *Client) FetchAppInstances(ctx context.Context, appID string) (m Applica
 	return
 }
 
-func (e *Client) FetchAppUpInstances(ctx context.Context, appID string) []Instance {
+func (e *Client) FetchAppUpInstances(ctx context.Context, appID string) ([]Instance, error) {
 	app, err := e.FetchAppInstances(ctx, appID)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return e.filterUp(app)
+	return e.filterUp(app), nil
 }
 
 func (e *Client) FetchAppInstance(ctx context.Context, appID string, instanceID string) (m Instance, err error) {
@@ -199,20 +216,105 @@ func (e *Client) Down(ctx context.Context, appID, instanceID string) error {
 	return e.do(ctx, http.MethodPut, []string{"apps", appID, instanceID, fmt.Sprintf("status?value=%s", statusDown)}, nil, nil)
 }
 
-func (e *Client) FetchAllUpInstances(ctx context.Context) []Instance {
-	return e.filterUp(e.FetchApps(ctx)...)
+func (e *Client) FetchAllUpInstances(ctx context.Context) ([]Instance, error) {
+	apps, err := e.FetchApps(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return e.filterUp(apps...), nil
 }
 
 func (e *Client) Register(ctx context.Context, ep Endpoint) error {
-	return e.registerEndpoint(ctx, ep)
+	if err := e.ctx.Err(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(e.ctx, cancel)
+	defer stop()
+	defer cancel()
+	if e.heartbeatInterval <= 0 {
+		return fmt.Errorf("heartbeat interval must be positive")
+	}
+	key := instanceKey{ep.AppID, ep.InstanceID}
+	state, release, err := e.acquireRegistration(ctx, key)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if err := e.stopHeartbeat(ctx, state); err != nil {
+		return err
+	}
+	ep.MetaData = maps.Clone(ep.MetaData)
+	if err := e.registerEndpoint(ctx, ep); err != nil {
+		return err
+	}
+	hbCtx, cancel := context.WithCancel(e.ctx)
+	hb := &heartbeat{ctx: hbCtx, cancel: cancel, done: make(chan struct{})}
+	e.lock.Lock()
+	state.heartbeat = hb
+	e.lock.Unlock()
+	go e.heartbeatLoop(key, state, hb, ep)
+	return nil
 }
 
 func (e *Client) Deregister(ctx context.Context, appID, instanceID string) error {
-	if err := e.do(ctx, http.MethodDelete, []string{"apps", appID, instanceID}, nil, nil); err != nil {
+	state, release, err := e.acquireRegistration(ctx, instanceKey{appID, instanceID})
+	if err != nil {
 		return err
 	}
-	go e.cancelHeartbeat(appID)
-	return nil
+	defer release()
+	if err := e.stopHeartbeat(ctx, state); err != nil {
+		return err
+	}
+	return e.do(ctx, http.MethodDelete, []string{"apps", appID, instanceID}, nil, nil)
+}
+
+// 每个实例独立串行生命周期操作；全局锁不跨网络请求或等待。
+func (e *Client) acquireRegistration(ctx context.Context, key instanceKey) (*registration, func(), error) {
+	e.lock.Lock()
+	state := e.registrations[key]
+	if state == nil {
+		state = &registration{gate: make(chan struct{}, 1)}
+		e.registrations[key] = state
+	}
+	state.refs++
+	e.lock.Unlock()
+	unref := func() {
+		e.lock.Lock()
+		defer e.lock.Unlock()
+		state.refs--
+		if state.refs == 0 && state.heartbeat == nil {
+			delete(e.registrations, key)
+		}
+	}
+	select {
+	case <-ctx.Done():
+		unref()
+		return nil, nil, ctx.Err()
+	case state.gate <- struct{}{}:
+		release := func() { <-state.gate; unref() }
+		if err := ctx.Err(); err != nil {
+			release()
+			return nil, nil, err
+		}
+		return state, release, nil
+	}
+}
+
+func (e *Client) stopHeartbeat(ctx context.Context, state *registration) error {
+	e.lock.Lock()
+	hb := state.heartbeat
+	e.lock.Unlock()
+	if hb == nil {
+		return nil
+	}
+	hb.cancel()
+	select {
+	case <-hb.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (e *Client) registerEndpoint(ctx context.Context, ep Endpoint) error {
@@ -250,36 +352,36 @@ func (e *Client) registerEndpoint(ctx context.Context, ep Endpoint) error {
 	return e.do(ctx, http.MethodPost, []string{"apps", ep.AppID}, bytes.NewReader(body), nil)
 }
 
-func (e *Client) Heartbeat(ep Endpoint) {
-	e.lock.Lock()
-	e.keepalive[ep.AppID] = make(chan struct{})
-	e.lock.Unlock()
-
+func (e *Client) heartbeatLoop(key instanceKey, state *registration, hb *heartbeat, ep Endpoint) {
+	defer func() {
+		hb.cancel()
+		e.lock.Lock()
+		if state.heartbeat == hb {
+			state.heartbeat = nil
+			if state.refs == 0 && e.registrations[key] == state {
+				delete(e.registrations, key)
+			}
+		}
+		e.lock.Unlock()
+		close(hb.done)
+	}()
 	ticker := time.NewTicker(e.heartbeatInterval)
 	defer ticker.Stop()
 	retryCount := 0
 	for {
 		select {
-		case <-e.ctx.Done():
-			return
-		case <-e.keepalive[ep.AppID]:
+		case <-hb.ctx.Done():
 			return
 		case <-ticker.C:
-			if err := e.do(e.ctx, http.MethodPut, []string{"apps", ep.AppID, ep.InstanceID}, nil, nil); err != nil {
+			if err := e.do(hb.ctx, http.MethodPut, []string{"apps", ep.AppID, ep.InstanceID}, nil, nil); err != nil {
 				if retryCount++; retryCount > heartbeatRetry {
-					_ = e.registerEndpoint(e.ctx, ep)
+					_ = e.registerEndpoint(hb.ctx, ep)
 					retryCount = 0
 				}
+			} else {
+				retryCount = 0
 			}
 		}
-	}
-}
-
-func (e *Client) cancelHeartbeat(appID string) {
-	e.lock.Lock()
-	defer e.lock.Unlock()
-	if ch, ok := e.keepalive[appID]; ok {
-		ch <- struct{}{}
 	}
 }
 
@@ -295,28 +397,13 @@ func (e *Client) filterUp(apps ...Application) (res []Instance) {
 	return
 }
 
-func (e *Client) pickServer(currentTimes int) string {
-	return e.urls[currentTimes%e.maxRetry]
-}
-
-func (e *Client) shuffle() {
-	rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), 0)).
-		Shuffle(len(e.urls), func(i, j int) {
-			e.urls[i], e.urls[j] = e.urls[j], e.urls[i]
-		})
-}
-
-func (e *Client) buildAPI(currentTimes int, params ...string) string {
-	if currentTimes == 0 {
-		e.shuffle()
-	}
-	server := e.pickServer(currentTimes)
+func (e *Client) buildAPI(server string, params ...string) string {
 	params = append([]string{server, e.eurekaPath}, params...)
 	return strings.Join(params, "/")
 }
 
-func (e *Client) request(ctx context.Context, method string, params []string, input io.Reader, output any, i int) (bool, error) {
-	request, err := http.NewRequestWithContext(ctx, method, e.buildAPI(i, params...), input)
+func (e *Client) request(ctx context.Context, server, method string, params []string, input io.Reader, output any) (bool, error) {
+	request, err := http.NewRequestWithContext(ctx, method, e.buildAPI(server, params...), input)
 	if err != nil {
 		return false, err
 	}
@@ -351,15 +438,32 @@ func (e *Client) request(ctx context.Context, method string, params []string, in
 }
 
 func (e *Client) do(ctx context.Context, method string, params []string, input io.Reader, output any) error {
-	for i := 0; i < e.maxRetry; i++ {
-		retry, err := e.request(ctx, method, params, input, output, i)
-		if retry {
-			continue
-		}
+	if len(e.urls) == 0 || e.maxRetry <= 0 {
+		return fmt.Errorf("Eureka requires a server and a positive request attempt count")
+	}
+	var body []byte
+	if input != nil {
+		var err error
+		body, err = io.ReadAll(input)
 		if err != nil {
 			return err
 		}
-		return nil
 	}
-	return fmt.Errorf("retry after %d times", e.maxRetry)
+	servers := slices.Clone(e.urls)
+	rand.Shuffle(len(servers), func(i, j int) { servers[i], servers[j] = servers[j], servers[i] })
+	var lastErr error
+	for i := 0; i < e.maxRetry; i++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		retry, err := e.request(ctx, servers[i%len(servers)], method, params, bytes.NewReader(body), output)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !retry {
+			return err
+		}
+		lastErr = err
+	}
+	return lastErr
 }

@@ -47,4 +47,4 @@ Go 验证统一设置 `GOCACHE=/tmp/meta-review-module-cache GOPROXY=off`。可�
 
 无实质范围偏差。每个 Registry 应独占 SDK client；已发出的 SDK 调用不能被单次 context 强制中断。核查发现 sc.Options.Timeout 未被传递，实际底层默认 HTTP 请求超时为 60 秒，已在需求/决策/README 澄清；不通过反射或全局配置改写该边界。SDK 地址健康检查及注册/注销与心跳生命周期维持原有实现。轮询有 1 秒等待和请求成本，无历史事件模型兼容。
 
-需求、决策、实现、验收证据及审查状态已同步，用户已确认将第 12 步实现与记录一并提交。下一步提出第 13 步 Eureka 方案，等待用户确认后实施；第 13 步不在本次修改中执行。
+需求、决策、实现、验收证据及审查状态已同步，用户确认后已提交为 `8445092`（`fix: poll complete ServiceComb discovery snapshots`）。用户已确认第 13 步 Eureka 方案，实施与验证见 [第 13 步进度](../eureka-concurrency/progress.md)。

@@ -2,63 +2,59 @@ package servicecomb
 
 import (
 	"context"
-
-	"github.com/go-chassis/sc-client"
+	"time"
 
 	"github.com/byteweap/meta/component/registry"
 )
 
+const watchInterval = time.Second
+
 type Watcher struct {
-	cli RegistryClient
-	ch  chan *registry.ServiceInstance
+	registry    *Registry
+	serviceName string
+	ctx         context.Context
+	cancel      context.CancelFunc
+	nextGate    chan struct{}
+	nextPoll    time.Time
 }
 
 var _ registry.Watcher = (*Watcher)(nil)
 
-func newWatcher(_ context.Context, cli RegistryClient, serviceName string) (*Watcher, error) {
-	// 建立当前服务与目标服务的依赖关系，用于发现
-	_, err := cli.FindMicroServiceInstances(curServiceID, appID, serviceName, "")
-	if err != nil {
-		return nil, err
+func newWatcher(ctx context.Context, r *Registry, serviceName string) *Watcher {
+	ctx, cancel := context.WithCancel(ctx)
+	return &Watcher{
+		registry:    r,
+		serviceName: serviceName,
+		ctx:         ctx,
+		cancel:      cancel,
+		nextGate:    make(chan struct{}, 1),
 	}
-	w := &Watcher{
-		cli: cli,
-		ch:  make(chan *registry.ServiceInstance),
-	}
-	go func() {
-		watchErr := w.cli.WatchMicroService(curServiceID, func(event *sc.MicroServiceInstanceChangedEvent) {
-			if event.Key.ServiceName != serviceName {
-				return
-			}
-			svcIns := &registry.ServiceInstance{
-				ID:        event.Instance.InstanceId,
-				Name:      event.Key.ServiceName,
-				Version:   event.Key.Version,
-				Metadata:  event.Instance.Properties,
-				Endpoints: event.Instance.Endpoints,
-			}
-			w.Put(svcIns)
-		})
-		if watchErr != nil {
-			return
-		}
-	}()
-	return w, nil
-}
-
-// Put 仅用于单元测试
-func (w *Watcher) Put(svcIns *registry.ServiceInstance) {
-	w.ch <- svcIns
 }
 
 func (w *Watcher) Next() ([]*registry.ServiceInstance, error) {
-	var svcInstances []*registry.ServiceInstance
-	svcIns := <-w.ch
-	svcInstances = append(svcInstances, svcIns)
-	return svcInstances, nil
+	// 串行消费完整快照，排队和轮询等待均可取消。
+	select {
+	case <-w.ctx.Done():
+		return nil, w.ctx.Err()
+	case w.nextGate <- struct{}{}:
+	}
+	defer func() { <-w.nextGate }()
+	if delay := time.Until(w.nextPoll); delay > 0 {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-w.ctx.Done():
+			return nil, w.ctx.Err()
+		case <-timer.C:
+		}
+	}
+
+	instances, err := w.registry.GetService(w.ctx, w.serviceName)
+	w.nextPoll = time.Now().Add(watchInterval)
+	return instances, err
 }
 
 func (w *Watcher) Stop() error {
-	close(w.ch)
+	w.cancel()
 	return nil
 }

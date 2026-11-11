@@ -3,7 +3,10 @@ package servicecomb
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"maps"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/go-chassis/cari/discovery"
@@ -24,9 +27,8 @@ func init() {
 }
 
 var (
-	curServiceID string
-	appID        string
-	env          string
+	appID string
+	env   string
 )
 
 const (
@@ -40,42 +42,66 @@ const (
 
 // Registry 是 servicecomb 注册中心实现
 type Registry struct {
-	cli RegistryClient
+	cli       RegistryClient
+	queryGate chan struct{}
 }
 
 var _ registry.Registry = (*Registry)(nil)
 
 func NewRegistry(client RegistryClient) *Registry {
-	r := &Registry{
-		cli: client,
+	return &Registry{
+		cli:       client,
+		queryGate: make(chan struct{}, 1),
 	}
-	return r
 }
 
 func (r *Registry) ID() string {
 	return "servicecomb"
 }
 
-func (r *Registry) GetService(_ context.Context, serviceName string) ([]*registry.ServiceInstance, error) {
-	instances, err := r.cli.FindMicroServiceInstances("", appID, serviceName, "")
+func (r *Registry) GetService(ctx context.Context, serviceName string) ([]*registry.ServiceInstance, error) {
+	// SDK 即使不发送 revision 也会读写共享状态，发现查询需要串行执行。
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case r.queryGate <- struct{}{}:
+	}
+	defer func() { <-r.queryGate }()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	instances, err := r.cli.FindMicroServiceInstances("", appID, serviceName, "", sc.WithoutRevision())
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
+	if errors.Is(err, sc.ErrMicroServiceNotExists) {
+		return []*registry.ServiceInstance{}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
 	svcInstances := make([]*registry.ServiceInstance, 0, len(instances))
 	for _, instance := range instances {
+		if instance == nil {
+			continue
+		}
 		svcInstances = append(svcInstances, &registry.ServiceInstance{
 			ID:        instance.InstanceId,
 			Name:      serviceName,
-			Metadata:  instance.Properties,
-			Endpoints: instance.Endpoints,
-			Version:   instance.ServiceId,
+			Metadata:  maps.Clone(instance.Properties),
+			Endpoints: slices.Clone(instance.Endpoints),
+			Version:   instance.Version,
 		})
 	}
 	return svcInstances, nil
 }
 
 func (r *Registry) Watch(ctx context.Context, serviceName string) (registry.Watcher, error) {
-	return newWatcher(ctx, r.cli, serviceName)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return newWatcher(ctx, r, serviceName), nil
 }
 
 func (r *Registry) Register(_ context.Context, svcIns *registry.ServiceInstance) error {
@@ -111,9 +137,6 @@ func (r *Registry) Register(_ context.Context, svcIns *registry.ServiceInstance)
 		if err != nil {
 			return err
 		}
-	} else {
-		// 记录新注册服务的 ID
-		curServiceID = sid
 	}
 	if svcIns.ID == "" {
 		var id uuid.UUID

@@ -47,4 +47,4 @@ Go 验证均使用 `GOCACHE=/tmp/meta-review-module-cache GOPROXY=off`。新增�
 
 无实质范围偏差。ListServices 同步初始化判断以保持空缓存读取一致，不引入新缓存模型、接口、依赖或兼容分支。保留原有本地共享监听回归，集成测试只调整空结果预期及有界等待。保持既有生命周期、重试和多数据中心逻辑。
 
-需求、实现、验收证据和审查状态已同步，用户已确认将第 11 步实现与记录一并提交。下一步提出第 12 步 ServiceComb 方案，等待用户确认后实施；第 12 步不在本次修改中执行。
+需求、实现、验收证据和审查状态已同步，用户确认后已提交为 `9cb7be2`（`fix: propagate empty Consul discovery snapshots`）。用户已确认第 12 步 ServiceComb 方案，实施与验证见 [第 12 步进度](../servicecomb-watcher/progress.md)。

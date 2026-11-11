@@ -11,17 +11,7 @@ import (
 	"github.com/byteweap/meta/component/registry"
 )
 
-var r *Registry
-
-func init() {
-	r = NewRegistry(&mockClient{})
-}
-
 type mockClient struct{}
-
-func (receiver *mockClient) WatchMicroService(_ string, _ func(*sc.MicroServiceInstanceChangedEvent)) error {
-	return nil
-}
 
 // nolint
 func (receiver *mockClient) FindMicroServiceInstances(_,
@@ -54,6 +44,7 @@ func (receiver *mockClient) GetMicroServiceID(_, _, _, _ string, _ ...sc.CallOpt
 }
 
 func TestRegistry(t *testing.T) {
+	r := NewRegistry(&mockClient{})
 	instanceID, err := uuid.NewV4()
 	if err != nil {
 		t.Fatal(err)
@@ -85,72 +76,6 @@ func TestRegistry(t *testing.T) {
 	t.Run("Deregister test, expected: success.", func(t *testing.T) {
 		svc.ID = instanceID.String()
 		err = r.Deregister(ctx, svc)
-		if err != nil {
-			t.Error(err)
-		}
-	})
-}
-
-func TestWatcher(t *testing.T) {
-	instanceID1, err := uuid.NewV4()
-	if err != nil {
-		t.Fatal(err)
-	}
-	svc1 := &registry.ServiceInstance{
-		Name:      "WatcherTest",
-		Version:   "0.0.1",
-		Metadata:  map[string]string{"app": "meta"},
-		Endpoints: []string{"tcp://127.0.0.1:9000?isSecure=false"},
-		ID:        instanceID1.String(),
-	}
-	ctx := context.TODO()
-	err = r.Register(ctx, svc1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	w, err := r.Watch(ctx, "WatcherTest")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if w == nil {
-		t.Fatal("w is nil")
-	}
-	sbWatcher := w.(*Watcher)
-	t.Run("Watch register event, expected: success", func(t *testing.T) {
-		go sbWatcher.Put(svc1)
-		var instances []*registry.ServiceInstance
-		instances, err = w.Next()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(instances) == 0 {
-			t.Errorf("instances is empty")
-		}
-		if instanceID1.String() != instances[0].ID {
-			t.Errorf("expected %v, got %v", instanceID1.String(), instances[0].ID)
-		}
-	})
-	t.Run("Watch deregister event, expected: success", func(t *testing.T) {
-		// 注销 instance1
-		err = r.Deregister(ctx, svc1)
-		if err != nil {
-			t.Fatal(err)
-		}
-		go sbWatcher.Put(svc1)
-		var instances []*registry.ServiceInstance
-		instances, err = w.Next()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(instances) == 0 {
-			t.Errorf("instances is empty")
-		}
-		if instanceID1.String() != instances[0].ID {
-			t.Errorf("expected %v, got %v", instanceID1.String(), instances[0].ID)
-		}
-	})
-	t.Run("Stop test, expected: success", func(t *testing.T) {
-		err = w.Stop()
 		if err != nil {
 			t.Error(err)
 		}

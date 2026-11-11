@@ -12,5 +12,4 @@ type RegistryClient interface {
 	RegisterMicroServiceInstance(microServiceInstance *discovery.MicroServiceInstance) (string, error)
 	Heartbeat(microServiceID, microServiceInstanceID string) (bool, error)
 	UnregisterMicroServiceInstance(microServiceID, microServiceInstanceID string) (bool, error)
-	WatchMicroService(microServiceID string, callback func(*sc.MicroServiceInstanceChangedEvent)) error
 }

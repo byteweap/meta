@@ -454,7 +454,7 @@ func TestBroadcastEventContinuesAfterPublishFailure(t *testing.T) {
 	g.appName = "gate"
 	g.appID = "gate-1"
 
-	g.broadcastEvent(7, cluster.EventOffline)
+	_ = g.broadcastEvent(g.ctx, 7, cluster.EventOffline)
 
 	bro.mu.Lock()
 	defer bro.mu.Unlock()

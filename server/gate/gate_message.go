@@ -1,6 +1,7 @@
 package gate
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"runtime/debug"
@@ -124,13 +125,14 @@ func (g *Gate) dispatch(uid int64, e *envelope.IMessage) {
 }
 
 // 广播系统事件
-func (g *Gate) broadcastEvent(uid int64, event cluster.Event) {
+func (g *Gate) broadcastEvent(ctx context.Context, uid int64, event cluster.Event) error {
 	// 获取玩家当前所在所有节点
-	snMap, err := g.opts.locator.AllNodes(g.ctx, uid)
+	snMap, err := g.opts.locator.AllNodes(ctx, uid)
 	if err != nil {
 		log.Errorf("[websocket] broadcast event, get all nodes error, uid: %v, event: %v, err: %v", uid, event, err)
-		return
+		return err
 	}
+	var result error
 	for service, node := range snMap {
 		if service == g.appName { // 不包括 gate
 			continue
@@ -140,12 +142,14 @@ func (g *Gate) broadcastEvent(uid int64, event cluster.Event) {
 			header  = cluster.BuildHeader(uid, event, g.Subject(service), g.appName, service)
 			subject = cluster.Subject(g.opts.prefix, g.appName, service, node)
 		)
-		if err = g.opts.broker.Pub(g.ctx, subject, nil, broker.PubHeader(header)); err != nil {
+		if err = g.opts.broker.Pub(ctx, subject, nil, broker.PubHeader(header)); err != nil {
+			result = errors.Join(result, err)
 			log.Errorf("[websocket] broadcast event error, uid: %v, subject: %v, err: %v", uid, subject, err)
 			continue
 		}
 		log.Debugf("[websocket] broadcast event success, uid: %v, subject: %v, event: %v", uid, subject, event)
 	}
+	return result
 }
 
 func cloneHeader(src broker.Header) broker.Header {

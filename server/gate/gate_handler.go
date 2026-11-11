@@ -1,6 +1,7 @@
 package gate
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gorilla/websocket"
@@ -14,6 +15,13 @@ import (
 
 // 连接建立时调用
 func (g *Gate) handleConnect(s *melody.Session) {
+	g.lifecycleMu.Lock()
+	stopping := g.stopped || g.ctx.Err() != nil
+	g.lifecycleMu.Unlock()
+	if stopping {
+		_ = s.WebsocketConnection().Close()
+		return
+	}
 	value, _ := s.Get("uid")
 	uid := value.(int64)
 	// 注册会话
@@ -40,7 +48,7 @@ func (g *Gate) handleConnect(s *melody.Session) {
 	if ok {
 		event = cluster.EventReconnect
 	}
-	g.broadcastEvent(uid, event)
+	_ = g.broadcastEvent(g.ctx, uid, event)
 }
 
 // 连接断开时调用
@@ -59,14 +67,22 @@ func (g *Gate) handleDisconnect(s *melody.Session) {
 	}
 
 	log.Infof("[websocket] connection disconnect success, uid: %v", uid)
+	ctx, cancel := g.disconnectContext()
+	defer cancel()
 
 	// 解绑网关
-	if err := g.opts.locator.UnBind(g.ctx, uid, g.appName, g.appID); err != nil {
+	err := g.opts.locator.UnBind(ctx, uid, g.appName, g.appID)
+	if err != nil {
 		log.Errorf("[websocket] connection disconnect success, unbind gate error, uid: %v, err: %v", uid, err)
 	}
 
 	// 广播掉线事件到上游服务
-	g.broadcastEvent(uid, cluster.EventOffline)
+	err = errors.Join(err, g.broadcastEvent(ctx, uid, cluster.EventOffline))
+	g.lifecycleMu.Lock()
+	if g.stopped {
+		g.stopErr = errors.Join(g.stopErr, err)
+	}
+	g.lifecycleMu.Unlock()
 }
 
 // 接收到文本消息时调用

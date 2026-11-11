@@ -42,6 +42,10 @@ type Gate struct {
 	stopped     bool
 	ready       chan struct{}
 	cancel      context.CancelFunc
+	tasks       sync.WaitGroup
+	stopDone    chan struct{}
+	stopCtx     context.Context
+	stopErr     error
 
 	mu        sync.RWMutex
 	selectors map[string]selector.Selector // 服务节点选择器 key: 服务名
@@ -57,14 +61,17 @@ func New(opts ...Option) *Gate {
 		opt(o)
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Gate{
-		ctx:       context.Background(),
+		ctx:       ctx,
+		cancel:    cancel,
 		opts:      o,
 		Server:    &http.Server{},
 		sessions:  newSessions(),
 		selectors: make(map[string]selector.Selector),
 		watchers:  make(map[string]registry.Watcher),
 		ready:     make(chan struct{}),
+		stopDone:  make(chan struct{}),
 	}
 }
 
@@ -129,6 +136,11 @@ func (g *Gate) setup(ctx context.Context, name, appID string) error {
 			http.NotFound(w, r)
 			return
 		}
+		if !g.beginTask() {
+			http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
+			return
+		}
+		defer g.tasks.Done()
 		uid := g.opts.userIDExtractor(r)
 		if uid <= 0 {
 			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
@@ -165,6 +177,9 @@ func (g *Gate) Start(ctx context.Context) error {
 		return err
 	}
 	g.started = true
+	g.tasks.Add(1)
+	defer g.tasks.Done()
+	g.cancel()
 	runCtx, cancel := context.WithCancel(ctx)
 	g.cancel = cancel
 	// 启动前设置
@@ -197,57 +212,6 @@ func (g *Gate) Start(ctx context.Context) error {
 	if err := g.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
-	return nil
-}
-
-// Stop 停止网关
-func (g *Gate) Stop(ctx context.Context) error {
-	g.lifecycleMu.Lock()
-	if g.stopped {
-		g.lifecycleMu.Unlock()
-		return nil
-	}
-	g.stopped = true
-	if g.cancel != nil {
-		g.cancel()
-	}
-	ln, ws := g.ln, g.ws
-	g.lifecycleMu.Unlock()
-
-	// 1. Shutdown http server
-	e1 := g.Shutdown(ctx)
-	if e1 != nil && ctx.Err() != nil {
-		log.Warn("[websocket] server couldn't stop gracefully in time, doing force stop")
-		e1 = errors.Join(e1, g.Close())
-	}
-	// Endpoint 可以在 Serve 前创建监听器，Shutdown 不会关闭这类监听器。
-	if ln != nil {
-		if err := ln.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			e1 = errors.Join(e1, err)
-		}
-	}
-
-	// 2. Close melody
-	var e2 error
-	if ws != nil {
-		e2 = ws.Close()
-	}
-
-	err := errors.Join(e1, e2)
-
-	// 3. 停止监听器
-	g.mu.Lock()
-	for _, watcher := range g.watchers {
-		if e := watcher.Stop(); e != nil {
-			err = errors.Join(err, e)
-		}
-	}
-	g.mu.Unlock()
-
-	if err != nil {
-		return err
-	}
-	log.Info("[gate] server stopped")
 	return nil
 }
 
@@ -288,6 +252,9 @@ func (g *Gate) listenAndEndpoint() error {
 
 // 循环处理来自其它服务的消息
 func (g *Gate) loop() error {
+	if !g.beginTask() {
+		return context.Canceled
+	}
 	var (
 		o       = g.opts
 		bro     = g.opts.broker
@@ -303,13 +270,16 @@ func (g *Gate) loop() error {
 		}
 	})
 	if err != nil {
+		g.tasks.Done()
 		return err
 	}
 
 	// 处理收到的消息
 	go func(ctx context.Context, sub broker.Subscription, ch <-chan *broker.Message) {
+		defer g.tasks.Done()
 		defer func() {
 			if err := sub.Close(); err != nil {
+				g.addStopError(err)
 				log.Errorf("gate close subscription error: %v", err)
 			}
 		}()
@@ -336,6 +306,10 @@ func (g *Gate) Subject(fromApp string) string {
 
 // 确保选择器
 func (g *Gate) ensure(service string) (selector.Selector, error) {
+	if !g.beginTask() {
+		return nil, context.Canceled
+	}
+	defer g.tasks.Done()
 	g.mu.RLock()
 	sel := g.selectors[service]
 	g.mu.RUnlock()
@@ -358,10 +332,19 @@ func (g *Gate) ensure(service string) (selector.Selector, error) {
 			return nil, err
 		}
 
+		g.lifecycleMu.Lock()
+		if g.stopped || g.ctx.Err() != nil {
+			g.lifecycleMu.Unlock()
+			closeErr := w.Stop()
+			g.addStopError(closeErr)
+			return nil, errors.Join(context.Canceled, closeErr)
+		}
 		g.mu.Lock()
 		if existing := g.selectors[service]; existing != nil {
 			g.mu.Unlock()
+			g.lifecycleMu.Unlock()
 			if stopErr := w.Stop(); stopErr != nil {
+				g.addStopError(stopErr)
 				log.Errorf("[websocket] ensure stop redundant watcher error, service: %v, err: %v", service, stopErr)
 			}
 			return existing, nil
@@ -369,8 +352,13 @@ func (g *Gate) ensure(service string) (selector.Selector, error) {
 		g.selectors[service] = created
 		g.watchers[service] = w
 		g.mu.Unlock()
+		g.tasks.Add(1)
+		g.lifecycleMu.Unlock()
 
-		go g.watchSelector(created, w)
+		go func() {
+			defer g.tasks.Done()
+			g.watchSelector(created, w)
+		}()
 		return created, nil
 	})
 	if err != nil {

@@ -3,7 +3,7 @@
 ## 当前状态
 
 - 需求见 [消息处理器 panic 恢复](requirements.md)。
-- 实施、本地验证和独立代码审查已完成，用户已批准提交。后续阶段为第 6 步方案确认。
+- 第 5 步已提交为 `80e71d8`，实施、本地验证和独立审查均已完成。第 6 步已获确认，进度见 [网关停止](../gate-shutdown/progress.md)。
 - 追溯级别为 Level 2，涉及故障处理和 RPC 异常响应行为。
 - 基线提交为 `9f11c11`。
 - 最后更新为 2026-11-11。
@@ -54,4 +54,4 @@
 
 生产变更集中在 [Gate 消息入口](../../server/gate/gate_message.go)、[Gate 循环](../../server/gate/gate.go)、[Mesh 消息入口与循环](../../server/mesh/mesh.go) 及 [RPC 调用边界](../../server/mesh/handler_rpc.go)。同步更新 [Recover 注释](../../pkg/async/safego.go)、[README](../../README.md)、两个回归测试及第 4 步提交状态和后续链接。
 
-需求、实现、验收证据和审查状态已同步，没有新增公共接口、依赖或兼容分支。用户已批准提交第 5 步，提交说明为 `fix: recover panics per message and return RPC failures`。提交完成后呈现第 6 步网关停止与资源清理方案，等待用户确认后实施。
+需求、实现、验收证据和审查状态已同步，没有新增公共接口、依赖或兼容分支。第 5 步已提交为 `80e71d8`，提交说明为 `fix: recover panics per message and return RPC failures`。后续从 [第 6 步进度](../gate-shutdown/progress.md) 继续，第 7 至 16 步待确认。

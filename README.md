@@ -84,6 +84,12 @@ type Server interface {
 
 `server/gate` 是客户端接入层，基于 `github.com/olahol/melody` 封装 WebSocket 服务。
 
+`Gate.Stop(ctx)` 会停止接收新连接和后台任务，关闭现有连接，并等待断开回调、消息循环、订阅及服务监听退出。解绑和下线通知使用独立的清理上下文，每次最多 10 秒；停止后的回调同时受首个 Stop 上下文约束。运行上下文取消不会直接使断开清理失效。
+
+并发、重复 Stop 共享同一次清理结果，各自用传入的 context 限制等待。超时不会把后台清理标记为完成，后续 Stop 仍可继续等待。组件关闭在锁外独立执行；没有 context 的关闭方法无法被强制终止。WebSocket 管理器在所有已准入请求和断开回调结束后才关闭，避免遗漏升级中的连接。
+
+订阅清理等待 `Subscription.Close` 返回，完成语义由组件提供。当前 NATS 适配器的 Close 调用异步 Drain，返回不代表其内部回调已全部结束。
+
 启动时，Gate 会：
 
 - 从 `meta.Context` 中读取应用 ID 和服务名。

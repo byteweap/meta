@@ -8,12 +8,21 @@ import (
 	"testing"
 )
 
+func mustNewMap[K comparable, V any](tb testing.TB, hash func(K) uint32, shardCount int) *ConcurrentMap[K, V] {
+	tb.Helper()
+	m, err := New[K, V](hash, shardCount)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return m
+}
+
 type Animal struct {
 	name string
 }
 
 func TestMapCreation(t *testing.T) {
-	m := New[string, string](FNV1a)
+	m := mustNewMap[string, string](t, FNV1a, DefaultShardCount)
 	if m.shards == nil {
 		t.Error("map is null.")
 	}
@@ -24,7 +33,7 @@ func TestMapCreation(t *testing.T) {
 }
 
 func TestInsert(t *testing.T) {
-	m := New[string, Animal](FNV1a)
+	m := mustNewMap[string, Animal](t, FNV1a, DefaultShardCount)
 
 	elephant := Animal{"elephant"}
 	sample := Animal{"sample"}
@@ -38,7 +47,7 @@ func TestInsert(t *testing.T) {
 }
 
 func TestInsertAbsent(t *testing.T) {
-	m := New[string, Animal](FNV1a)
+	m := mustNewMap[string, Animal](t, FNV1a, DefaultShardCount)
 	elephant := Animal{"elephant"}
 	sample := Animal{"sample"}
 
@@ -49,7 +58,7 @@ func TestInsertAbsent(t *testing.T) {
 }
 
 func TestGet(t *testing.T) {
-	m := New[string, Animal](FNV1a)
+	m := mustNewMap[string, Animal](t, FNV1a, DefaultShardCount)
 
 	// Get a missing element.
 	val, ok := m.Get("Money")
@@ -77,7 +86,7 @@ func TestGet(t *testing.T) {
 }
 
 func TestHas(t *testing.T) {
-	m := New[string, Animal](FNV1a)
+	m := mustNewMap[string, Animal](t, FNV1a, DefaultShardCount)
 
 	// Get a missing element.
 	if m.Has("Money") == true {
@@ -93,7 +102,7 @@ func TestHas(t *testing.T) {
 }
 
 func TestRemove(t *testing.T) {
-	m := New[string, Animal](FNV1a)
+	m := mustNewMap[string, Animal](t, FNV1a, DefaultShardCount)
 
 	sample := Animal{"sample"}
 	m.Set("sample", sample)
@@ -119,7 +128,7 @@ func TestRemove(t *testing.T) {
 }
 
 func TestRemoveCb(t *testing.T) {
-	m := New[string, Animal](FNV1a)
+	m := mustNewMap[string, Animal](t, FNV1a, DefaultShardCount)
 
 	sample := Animal{"sample"}
 	m.Set("sample", sample)
@@ -207,7 +216,7 @@ func TestRemoveCb(t *testing.T) {
 }
 
 func TestPop(t *testing.T) {
-	m := New[string, Animal](FNV1a)
+	m := mustNewMap[string, Animal](t, FNV1a, DefaultShardCount)
 
 	sample := Animal{"sample"}
 	m.Set("sample", sample)
@@ -240,7 +249,7 @@ func TestPop(t *testing.T) {
 }
 
 func TestCount(t *testing.T) {
-	m := New[string, Animal](FNV1a)
+	m := mustNewMap[string, Animal](t, FNV1a, DefaultShardCount)
 	for i := 0; i < 100; i++ {
 		m.Set(strconv.Itoa(i), Animal{strconv.Itoa(i)})
 	}
@@ -251,7 +260,7 @@ func TestCount(t *testing.T) {
 }
 
 func TestIsEmpty(t *testing.T) {
-	m := New[string, Animal](FNV1a)
+	m := mustNewMap[string, Animal](t, FNV1a, DefaultShardCount)
 
 	if m.IsEmpty() == false {
 		t.Error("new map should be empty")
@@ -265,7 +274,7 @@ func TestIsEmpty(t *testing.T) {
 }
 
 func TestIterator(t *testing.T) {
-	m := New[string, Animal](FNV1a)
+	m := mustNewMap[string, Animal](t, FNV1a, DefaultShardCount)
 
 	// Insert 100 elements.
 	for i := 0; i < 100; i++ {
@@ -289,7 +298,7 @@ func TestIterator(t *testing.T) {
 }
 
 func TestBufferedIterator(t *testing.T) {
-	m := New[string, Animal](FNV1a)
+	m := mustNewMap[string, Animal](t, FNV1a, DefaultShardCount)
 
 	// Insert 100 elements.
 	for i := 0; i < 100; i++ {
@@ -313,7 +322,7 @@ func TestBufferedIterator(t *testing.T) {
 }
 
 func TestClear(t *testing.T) {
-	m := New[string, Animal](FNV1a)
+	m := mustNewMap[string, Animal](t, FNV1a, DefaultShardCount)
 
 	// Insert 100 elements.
 	for i := 0; i < 100; i++ {
@@ -328,7 +337,7 @@ func TestClear(t *testing.T) {
 }
 
 func TestIterCb(t *testing.T) {
-	m := New[string, Animal](FNV1a)
+	m := mustNewMap[string, Animal](t, FNV1a, DefaultShardCount)
 
 	// Insert 100 elements.
 	for i := 0; i < 100; i++ {
@@ -346,7 +355,7 @@ func TestIterCb(t *testing.T) {
 }
 
 func TestItems(t *testing.T) {
-	m := New[string, Animal](FNV1a)
+	m := mustNewMap[string, Animal](t, FNV1a, DefaultShardCount)
 
 	// Insert 100 elements.
 	for i := 0; i < 100; i++ {
@@ -361,7 +370,7 @@ func TestItems(t *testing.T) {
 }
 
 func TestConcurrent(t *testing.T) {
-	m := New[string, int](FNV1a)
+	m := mustNewMap[string, int](t, FNV1a, DefaultShardCount)
 	ch := make(chan int)
 	const iterations = 1000
 	var a [iterations]int
@@ -420,12 +429,8 @@ func TestConcurrent(t *testing.T) {
 }
 
 func TestJsonMarshal(t *testing.T) {
-	ShardCount = 2
-	defer func() {
-		ShardCount = 32
-	}()
 	expected := "{\"a\":1,\"b\":2}"
-	m := New[string, int](FNV1a)
+	m := mustNewMap[string, int](t, FNV1a, 2)
 	m.Set("a", 1)
 	m.Set("b", 2)
 	j, err := json.Marshal(m)
@@ -440,7 +445,7 @@ func TestJsonMarshal(t *testing.T) {
 }
 
 func TestKeys(t *testing.T) {
-	m := New[string, Animal](FNV1a)
+	m := mustNewMap[string, Animal](t, FNV1a, DefaultShardCount)
 
 	// Insert 100 elements.
 	for i := 0; i < 100; i++ {
@@ -458,7 +463,7 @@ func TestMInsert(t *testing.T) {
 		"elephant": {"elephant"},
 		"sample":   {"sample"},
 	}
-	m := New[string, Animal](FNV1a)
+	m := mustNewMap[string, Animal](t, FNV1a, DefaultShardCount)
 	m.MSet(animals)
 
 	if m.Count() != 2 {
@@ -493,7 +498,7 @@ func TestUpsert(t *testing.T) {
 		return valueInMap
 	}
 
-	m := New[string, Animal](FNV1a)
+	m := mustNewMap[string, Animal](t, FNV1a, DefaultShardCount)
 	m.Set("marine", dolphin)
 	m.Upsert("marine", whale, cb)
 	m.Upsert("predator", tiger, cb)
@@ -515,7 +520,7 @@ func TestUpsert(t *testing.T) {
 }
 
 func TestKeysWhenRemoving(t *testing.T) {
-	m := New[string, Animal](FNV1a)
+	m := mustNewMap[string, Animal](t, FNV1a, DefaultShardCount)
 
 	// Insert 100 elements.
 	Total := 100
@@ -539,7 +544,7 @@ func TestKeysWhenRemoving(t *testing.T) {
 }
 
 func TestUnDrainedIter(t *testing.T) {
-	m := New[string, Animal](FNV1a)
+	m := mustNewMap[string, Animal](t, FNV1a, DefaultShardCount)
 	// Insert 100 elements.
 	Total := 100
 	for i := 0; i < Total; i++ {
@@ -591,7 +596,7 @@ func TestUnDrainedIter(t *testing.T) {
 }
 
 func TestUnDrainedIterBuffered(t *testing.T) {
-	m := New[string, Animal](FNV1a)
+	m := mustNewMap[string, Animal](t, FNV1a, DefaultShardCount)
 	// Insert 100 elements.
 	Total := 100
 	for i := 0; i < Total; i++ {
@@ -661,7 +666,7 @@ func TestFNV1aStr(t *testing.T) {
 }
 
 func TestUnmarshalJSON(t *testing.T) {
-	m := New[string, int](FNV1a)
+	m := mustNewMap[string, int](t, FNV1a, DefaultShardCount)
 	data := []byte(`{"a":1,"b":2,"c":3}`)
 	err := m.UnmarshalJSON(data)
 	if err != nil {
@@ -685,7 +690,7 @@ func TestUnmarshalJSON(t *testing.T) {
 }
 
 func TestUnmarshalJSON_Invalid(t *testing.T) {
-	m := New[string, int](FNV1a)
+	m := mustNewMap[string, int](t, FNV1a, DefaultShardCount)
 	data := []byte(`invalid json`)
 	err := m.UnmarshalJSON(data)
 	if err == nil {

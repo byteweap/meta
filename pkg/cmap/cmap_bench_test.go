@@ -13,7 +13,7 @@ func (i Integer) String() string {
 }
 
 func BenchmarkItems(b *testing.B) {
-	m := New[string, Animal](FNV1a)
+	m := mustNewMap[string, Animal](b, FNV1a, DefaultShardCount)
 
 	for i := 0; i < 10000; i++ {
 		m.Set(strconv.Itoa(i), Animal{strconv.Itoa(i)})
@@ -27,7 +27,7 @@ func BenchmarkItems(b *testing.B) {
 }
 
 func BenchmarkItemsInteger(b *testing.B) {
-	m := New[Integer, Animal](FNV1aStr)
+	m := mustNewMap[Integer, Animal](b, FNV1aStr, DefaultShardCount)
 
 	// Insert 100 elements.
 	for i := 0; i < 10000; i++ {
@@ -43,7 +43,7 @@ func directSharding(key uint32) uint32 {
 }
 
 func BenchmarkItemsInt(b *testing.B) {
-	m := New[uint32, Animal](directSharding)
+	m := mustNewMap[uint32, Animal](b, directSharding, DefaultShardCount)
 
 	for i := 0; i < 10000; i++ {
 		m.Set((uint32)(i), Animal{strconv.Itoa(i)})
@@ -54,7 +54,7 @@ func BenchmarkItemsInt(b *testing.B) {
 }
 
 func BenchmarkMarshalJson(b *testing.B) {
-	m := New[string, Animal](FNV1a)
+	m := mustNewMap[string, Animal](b, FNV1a, DefaultShardCount)
 
 	// Insert 100 elements.
 	for i := 0; i < 10000; i++ {
@@ -85,7 +85,7 @@ func BenchmarkHashMix64(b *testing.B) {
 
 func BenchmarkSingleInsertAbsent(b *testing.B) {
 	b.Run("cmap", func(b *testing.B) {
-		m := New[string, string](FNV1a)
+		m := mustNewMap[string, string](b, FNV1a, DefaultShardCount)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			m.Set(strconv.Itoa(i), "value")
@@ -103,7 +103,7 @@ func BenchmarkSingleInsertAbsent(b *testing.B) {
 
 func BenchmarkSingleInsertPresent(b *testing.B) {
 	b.Run("cmap", func(b *testing.B) {
-		m := New[string, string](FNV1a)
+		m := mustNewMap[string, string](b, FNV1a, DefaultShardCount)
 		m.Set("key", "value")
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
@@ -121,10 +121,10 @@ func BenchmarkSingleInsertPresent(b *testing.B) {
 	})
 }
 
-func benchmarkMultiInsertDifferent(b *testing.B) {
+func benchmarkMultiInsertDifferent(b *testing.B, shardCount int) {
 	b.Helper()
 
-	m := New[string, string](FNV1a)
+	m := mustNewMap[string, string](b, FNV1a, shardCount)
 	finished := make(chan struct{}, b.N)
 	_, set := GetSet(m, finished)
 	b.ResetTimer()
@@ -152,25 +152,25 @@ func BenchmarkMultiInsertDifferentSyncMap(b *testing.B) {
 
 func BenchmarkMultiInsertDifferent(b *testing.B) {
 	b.Run("shards_1", func(b *testing.B) {
-		runWithShards(b, benchmarkMultiInsertDifferent, 1)
+		benchmarkMultiInsertDifferent(b, 1)
 	})
 	b.Run("shards_16", func(b *testing.B) {
-		runWithShards(b, benchmarkMultiInsertDifferent, 16)
+		benchmarkMultiInsertDifferent(b, 16)
 	})
 	b.Run("shards_32", func(b *testing.B) {
-		runWithShards(b, benchmarkMultiInsertDifferent, 32)
+		benchmarkMultiInsertDifferent(b, 32)
 	})
 	b.Run("shards_64", func(b *testing.B) {
-		runWithShards(b, benchmarkMultiInsertDifferent, 64)
+		benchmarkMultiInsertDifferent(b, 64)
 	})
 	b.Run("shards_256", func(b *testing.B) {
-		runWithShards(b, benchmarkMultiInsertDifferent, 256)
+		benchmarkMultiInsertDifferent(b, 256)
 	})
 }
 
 func BenchmarkMultiInsertSame(b *testing.B) {
 	b.Run("cmap", func(b *testing.B) {
-		m := New[string, string](FNV1a)
+		m := mustNewMap[string, string](b, FNV1a, DefaultShardCount)
 		finished := make(chan struct{}, b.N)
 		_, set := GetSet(m, finished)
 		m.Set("key", "value")
@@ -200,7 +200,7 @@ func BenchmarkMultiInsertSame(b *testing.B) {
 
 func BenchmarkMultiGetSame(b *testing.B) {
 	b.Run("cmap", func(b *testing.B) {
-		m := New[string, string](FNV1a)
+		m := mustNewMap[string, string](b, FNV1a, DefaultShardCount)
 		finished := make(chan struct{}, b.N)
 		get, _ := GetSet(m, finished)
 		m.Set("key", "value")
@@ -228,10 +228,10 @@ func BenchmarkMultiGetSame(b *testing.B) {
 	})
 }
 
-func benchmarkMultiGetSetDifferent(b *testing.B) {
+func benchmarkMultiGetSetDifferent(b *testing.B, shardCount int) {
 	b.Helper()
 
-	m := New[string, string](FNV1a)
+	m := mustNewMap[string, string](b, FNV1a, shardCount)
 	finished := make(chan struct{}, 2*b.N)
 	get, set := GetSet(m, finished)
 	m.Set("-1", "value")
@@ -247,16 +247,16 @@ func benchmarkMultiGetSetDifferent(b *testing.B) {
 
 func BenchmarkMultiGetSetDifferent(b *testing.B) {
 	b.Run("cmap_shards_1", func(b *testing.B) {
-		runWithShards(b, benchmarkMultiGetSetDifferent, 1)
+		benchmarkMultiGetSetDifferent(b, 1)
 	})
 	b.Run("cmap_shards_16", func(b *testing.B) {
-		runWithShards(b, benchmarkMultiGetSetDifferent, 16)
+		benchmarkMultiGetSetDifferent(b, 16)
 	})
 	b.Run("cmap_shards_32", func(b *testing.B) {
-		runWithShards(b, benchmarkMultiGetSetDifferent, 32)
+		benchmarkMultiGetSetDifferent(b, 32)
 	})
 	b.Run("cmap_shards_256", func(b *testing.B) {
-		runWithShards(b, benchmarkMultiGetSetDifferent, 256)
+		benchmarkMultiGetSetDifferent(b, 256)
 	})
 
 	b.Run("syncmap", func(b *testing.B) {
@@ -275,10 +275,10 @@ func BenchmarkMultiGetSetDifferent(b *testing.B) {
 	})
 }
 
-func benchmarkMultiGetSetBlock(b *testing.B) {
+func benchmarkMultiGetSetBlock(b *testing.B, shardCount int) {
 	b.Helper()
 
-	m := New[string, string](FNV1a)
+	m := mustNewMap[string, string](b, FNV1a, shardCount)
 	finished := make(chan struct{}, 2*b.N)
 	get, set := GetSet(m, finished)
 	for i := 0; i < b.N; i++ {
@@ -296,16 +296,16 @@ func benchmarkMultiGetSetBlock(b *testing.B) {
 
 func BenchmarkMultiGetSetBlock(b *testing.B) {
 	b.Run("cmap_shards_1", func(b *testing.B) {
-		runWithShards(b, benchmarkMultiGetSetBlock, 1)
+		benchmarkMultiGetSetBlock(b, 1)
 	})
 	b.Run("cmap_shards_16", func(b *testing.B) {
-		runWithShards(b, benchmarkMultiGetSetBlock, 16)
+		benchmarkMultiGetSetBlock(b, 16)
 	})
 	b.Run("cmap_shards_32", func(b *testing.B) {
-		runWithShards(b, benchmarkMultiGetSetBlock, 32)
+		benchmarkMultiGetSetBlock(b, 32)
 	})
 	b.Run("cmap_shards_256", func(b *testing.B) {
-		runWithShards(b, benchmarkMultiGetSetBlock, 256)
+		benchmarkMultiGetSetBlock(b, 256)
 	})
 
 	b.Run("syncmap", func(b *testing.B) {
@@ -356,17 +356,8 @@ func GetSetSyncMap[K comparable, V any](m *sync.Map, finished chan struct{}) (ge
 	return
 }
 
-func runWithShards(b *testing.B, bench func(b *testing.B), shardsCount int) {
-	b.Helper()
-
-	oldShardsCount := ShardCount
-	ShardCount = shardsCount
-	bench(b)
-	ShardCount = oldShardsCount
-}
-
 func BenchmarkKeys(b *testing.B) {
-	m := New[string, Animal](FNV1a)
+	m := mustNewMap[string, Animal](b, FNV1a, DefaultShardCount)
 
 	// Insert 100 elements.
 	for i := 0; i < 10000; i++ {

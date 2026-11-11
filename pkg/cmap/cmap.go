@@ -2,11 +2,13 @@ package cmap
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 )
 
-var ShardCount = 32
+// DefaultShardCount 是构造 map 时可选用的默认分片数。
+const DefaultShardCount = 32
 
 type Stringer interface {
 	fmt.Stringer
@@ -25,26 +27,28 @@ type shardMap[K comparable, V any] struct {
 	sync.RWMutex // 读写锁，保护内部 map
 }
 
-func create[K comparable, V any](sharding func(key K) uint32) *ConcurrentMap[K, V] {
+// New 创建分片数固定的并发 map。
+// sharding 必须非 nil、结果确定且可并发调用；shardCount 必须为正。
+func New[K comparable, V any](sharding func(key K) uint32, shardCount int) (*ConcurrentMap[K, V], error) {
+	if sharding == nil {
+		return nil, errors.New("cmap: sharding function must not be nil")
+	}
+	if shardCount <= 0 {
+		return nil, errors.New("cmap: shard count must be positive")
+	}
 	m := &ConcurrentMap[K, V]{
 		sharding: sharding,
-		shards:   make([]*shardMap[K, V], ShardCount),
+		shards:   make([]*shardMap[K, V], shardCount),
 	}
-	for i := 0; i < ShardCount; i++ {
+	for i := range m.shards {
 		m.shards[i] = &shardMap[K, V]{items: make(map[K]V)}
 	}
-	return m
-}
-
-// New 创建并发 map
-// sharding: 分片函数
-func New[K comparable, V any](sharding func(key K) uint32) *ConcurrentMap[K, V] {
-	return create[K, V](sharding)
+	return m, nil
 }
 
 // getShard 根据 key 返回对应分片
 func (m *ConcurrentMap[K, V]) getShard(key K) *shardMap[K, V] {
-	return m.shards[uint(m.sharding(key))%uint(ShardCount)]
+	return m.shards[uint(m.sharding(key))%uint(len(m.shards))]
 }
 
 // MSet 批量设置键值
@@ -107,8 +111,7 @@ func (m *ConcurrentMap[K, V]) Get(key K) (V, bool) {
 // Count 返回元素数量
 func (m *ConcurrentMap[K, V]) Count() int {
 	count := 0
-	for i := 0; i < ShardCount; i++ {
-		shard := m.shards[i]
+	for _, shard := range m.shards {
 		shard.RLock()
 		count += len(shard.items)
 		shard.RUnlock()
@@ -201,9 +204,9 @@ func snapshot[K comparable, V any](m *ConcurrentMap[K, V]) (cs []chan Tuple[K, V
 	if len(m.shards) == 0 {
 		panic(`cmap.ConcurrentMap is not initialized. Should run New() before usage.`)
 	}
-	cs = make([]chan Tuple[K, V], ShardCount)
+	cs = make([]chan Tuple[K, V], len(m.shards))
 	wg := sync.WaitGroup{}
-	wg.Add(ShardCount)
+	wg.Add(len(m.shards))
 	// 遍历分片
 	for index, shard := range m.shards {
 		go func(index int, shard *shardMap[K, V]) {
@@ -273,7 +276,7 @@ func (m *ConcurrentMap[K, V]) Keys() []K {
 	go func() {
 		// 遍历分片
 		wg := sync.WaitGroup{}
-		wg.Add(ShardCount)
+		wg.Add(len(m.shards))
 		for _, shard := range m.shards {
 			go func(shard *shardMap[K, V]) {
 				// 遍历键

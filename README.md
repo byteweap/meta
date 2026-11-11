@@ -57,12 +57,14 @@ Meta 是一个轻量、可插拔、面向长连接游戏/实时业务的 Go 服�
 1. 根据 `ID/Name/Version/Metadata/Endpoint` 构建 `registry.ServiceInstance`。
 2. 执行 `PreStart` 钩子。
 3. 并发启动所有 `server.Server`。
-4. 启动完成后把实例注册到 `Registry`。
+4. 等待全部服务的 `Ready` 信号后，把实例注册到 `Registry`。
 5. 执行 `PostStart` 钩子。
-6. 监听 `SIGTERM/SIGQUIT/SIGINT` 或外部 `Stop()`。
-7. 停止前执行 `PreStop`，从注册中心注销实例。
-8. 取消应用上下文，并按 `StopTimeout` 优雅停止所有 server。
-9. 执行 `PostStop` 钩子。
+6. 运行期间响应 `SIGTERM/SIGQUIT/SIGINT`、父上下文取消或外部 `Stop()`；启动失败也进入同一清理流程。
+7. 取消运行上下文，使用独立的清理上下文执行 `PreStop`，注销已尝试注册的实例。
+8. 停止所有配置的 server，并等待已启动的 `Start` 返回。
+9. 执行全部 `PostStop` 钩子，合并返回启动和清理错误。任一清理步骤失败都继续执行后续步骤。
+
+每个 App 及其服务实例只用于一次运行。`Stop()` 只发出停止请求，可重复调用，也可从钩子中调用；等待 `Run()` 返回才能确认清理结束并取得错误。全部清理步骤共享 `StopTimeout`，默认 10 秒，钩子和自定义服务应遵守传入的上下文截止时间。Endpoint 或启动前钩子失败时，也会停止已配置服务以释放提前分配的资源。
 
 `server.Server` 是框架运行单元的最小协议：
 
@@ -70,12 +72,13 @@ Meta 是一个轻量、可插拔、面向长连接游戏/实时业务的 Go 服�
 type Server interface {
     Kind() Kind
     Start(ctx context.Context) error
+    Ready() <-chan struct{}
     Stop(ctx context.Context) error
     Endpoint(ctx context.Context) (*url.URL, error)
 }
 ```
 
-这使得 `gate`、`mesh` 或业务自定义 server 都能被同一套生命周期托管。
+`Ready` 从构造起返回同一通道，必要初始化和消息订阅生效后关闭；失败时不发送就绪信号。`Start` 持续运行到停止或失败，`Stop` 应允许在启动前或启动期间调用。Gate、Mesh 和业务自定义 server 均遵循这一契约。NATS 的订阅会等待服务端确认后再返回。
 
 ## Gate 设计
 

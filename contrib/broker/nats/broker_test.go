@@ -100,9 +100,6 @@ func TestQueueSubscribe_ExactlyOnce(t *testing.T) {
 	}, broker.SubQueue(queue))
 	require.NoError(t, err)
 
-	// 给订阅一点时间完成传播
-	time.Sleep(50 * time.Millisecond)
-
 	for i := 0; i < N; i++ {
 		require.NoError(t, b.Pub(ctx, subject, []byte("x")))
 	}
@@ -197,6 +194,11 @@ func TestContextErrFastFail(t *testing.T) {
 	cancel()
 
 	require.ErrorIs(t, b.Pub(ctx, "t.any", []byte("x")), context.Canceled)
+
+	sub, err := b.Sub(ctx, "t.any", func(*broker.Message) {})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, sub)
+	require.Zero(t, b.nc.NumSubscriptions())
 
 	_, err = b.Request(ctx, "t.any", []byte("x"))
 	require.ErrorIs(t, err, context.Canceled)

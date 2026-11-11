@@ -57,6 +57,7 @@ func defaultOptions() *options {
 		ctx:             context.Background(),
 		sigs:            []os.Signal{syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGINT},
 		registryTimeout: time.Second * 10,
+		stopTimeout:     time.Second * 10,
 	}
 }
 
@@ -95,7 +96,7 @@ func Logger(logger log.Logger) Option {
 	return func(o *options) { o.logger = logger }
 }
 
-// Signal 设置退出信号
+// Signal 设置退出信号；不传信号时关闭系统信号监听。
 func Signal(sigs ...os.Signal) Option {
 	return func(o *options) { o.sigs = sigs }
 }
@@ -110,9 +111,13 @@ func RegistryTimeout(t time.Duration) Option {
 	return func(o *options) { o.registryTimeout = t }
 }
 
-// StopTimeout 设置停止超时
+// StopTimeout 设置全部清理步骤共享的超时，默认 10 秒；非正数不生效。
 func StopTimeout(t time.Duration) Option {
-	return func(o *options) { o.stopTimeout = t }
+	return func(o *options) {
+		if t > 0 {
+			o.stopTimeout = t
+		}
+	}
 }
 
 // Server 设置服务列表

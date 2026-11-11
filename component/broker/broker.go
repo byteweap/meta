@@ -14,6 +14,7 @@ type Broker interface {
 	Pub(ctx context.Context, subject string, data []byte, opts ...PublishOption) error
 
 	// Sub 订阅主题。需要队列组 (Queue Group) 时请使用 SubscribeOption
+	// 成功返回时订阅已生效，可接收其他连接发布的消息；失败时释放本次订阅。
 	Sub(ctx context.Context, subject string, handler Handler, opts ...SubscribeOption) (Subscription, error)
 
 	// Request 发送请求并等待响应 (request-reply)

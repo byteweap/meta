@@ -38,6 +38,12 @@ type Gate struct {
 	ws       *melody.Melody // WebSocket server
 	sessions *Sessions      // player sessions
 
+	lifecycleMu sync.Mutex
+	started     bool
+	stopped     bool
+	ready       chan struct{}
+	cancel      context.CancelFunc
+
 	mu        sync.RWMutex
 	selectors map[string]selector.Selector // 服务节点选择器 key: 服务名
 	watchers  map[string]registry.Watcher  // 服务节点监听器 key: 服务名
@@ -59,12 +65,16 @@ func New(opts ...Option) *Gate {
 		sessions:  newSessions(),
 		selectors: make(map[string]selector.Selector),
 		watchers:  make(map[string]registry.Watcher),
+		ready:     make(chan struct{}),
 	}
 }
 
 func (g *Gate) Kind() server.Kind {
 	return server.KindGate
 }
+
+// Ready 返回本次启动的就绪信号。
+func (g *Gate) Ready() <-chan struct{} { return g.ready }
 
 func (g *Gate) validate() error {
 	if g.opts == nil {
@@ -142,35 +152,86 @@ func (g *Gate) Start(ctx context.Context) error {
 	if err := g.validate(); err != nil {
 		return err
 	}
+	g.lifecycleMu.Lock()
+	if g.stopped {
+		g.lifecycleMu.Unlock()
+		return context.Canceled
+	}
+	if g.started {
+		g.lifecycleMu.Unlock()
+		return errors.New("gate already started")
+	}
+	if err := ctx.Err(); err != nil {
+		g.lifecycleMu.Unlock()
+		return err
+	}
+	g.started = true
+	runCtx, cancel := context.WithCancel(ctx)
+	g.cancel = cancel
 	// 启动前设置
-	if err := g.setup(ctx, app.Name(), app.ID()); err != nil {
+	err := g.setup(runCtx, app.Name(), app.ID())
+	ln := g.ln
+	g.lifecycleMu.Unlock()
+	defer cancel()
+	if err != nil {
 		return fmt.Errorf("setup failed: %w", err)
 	}
 	// 循环(常驻协程)
 	if err := g.loop(); err != nil {
+		if err == runCtx.Err() {
+			return err
+		}
 		return fmt.Errorf("loop failed: %w", err)
 	}
+	g.lifecycleMu.Lock()
+	if err := runCtx.Err(); err != nil {
+		g.lifecycleMu.Unlock()
+		return err
+	}
+	close(g.ready)
+	g.lifecycleMu.Unlock()
 
 	log.Infof("[gate] server started")
-	log.Infof("[websocket] server listening on: %s", g.ln.Addr().String())
+	log.Infof("[websocket] server listening on: %s", ln.Addr().String())
 
 	// 启动服务
-	return g.Serve(g.ln)
+	if err := g.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 // Stop 停止网关
 func (g *Gate) Stop(ctx context.Context) error {
+	g.lifecycleMu.Lock()
+	if g.stopped {
+		g.lifecycleMu.Unlock()
+		return nil
+	}
+	g.stopped = true
+	if g.cancel != nil {
+		g.cancel()
+	}
+	ln, ws := g.ln, g.ws
+	g.lifecycleMu.Unlock()
+
 	// 1. Shutdown http server
 	e1 := g.Shutdown(ctx)
 	if e1 != nil && ctx.Err() != nil {
 		log.Warn("[websocket] server couldn't stop gracefully in time, doing force stop")
-		e1 = g.Close()
+		e1 = errors.Join(e1, g.Close())
+	}
+	// Endpoint 可以在 Serve 前创建监听器，Shutdown 不会关闭这类监听器。
+	if ln != nil {
+		if err := ln.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			e1 = errors.Join(e1, err)
+		}
 	}
 
 	// 2. Close melody
 	var e2 error
-	if g.ws != nil {
-		e2 = g.ws.Close()
+	if ws != nil {
+		e2 = ws.Close()
 	}
 
 	err := errors.Join(e1, e2)
@@ -192,7 +253,15 @@ func (g *Gate) Stop(ctx context.Context) error {
 }
 
 // Endpoint 获取网关地址
-func (g *Gate) Endpoint(_ context.Context) (*url.URL, error) {
+func (g *Gate) Endpoint(ctx context.Context) (*url.URL, error) {
+	g.lifecycleMu.Lock()
+	defer g.lifecycleMu.Unlock()
+	if g.stopped {
+		return nil, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := g.listenAndEndpoint(); err != nil {
 		return nil, err
 	}
@@ -245,7 +314,7 @@ func (g *Gate) loop() error {
 			async.Recover(func(r any) {
 				log.Errorf("gate handler panic error: %v", r)
 			})
-			if err = sub.Close(); err != nil {
+			if err := sub.Close(); err != nil {
 				log.Errorf("gate close subscription error: %v", err)
 			}
 		}()

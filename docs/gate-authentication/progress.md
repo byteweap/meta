@@ -3,7 +3,7 @@
 ## 当前状态
 
 - 需求见 [网关握手前身份验证](requirements.md)。
-- 当前阶段为实施、本地验证和独立代码审查完成，用户已批准提交。后续阶段为第 4 步方案确认。
+- 第 3 步已提交为 `0d0a8a1`，实施、本地验证和独立审查均已完成。第 4 步已获确认，进度见 [应用生命周期](../application-lifecycle/progress.md)。
 - 追溯级别为 Level 2，原因是涉及身份验证边界。
 - 基线提交为 `3c23403`。
 - 最后更新为 2026-11-11。
@@ -47,4 +47,4 @@
 
 生产变更集中在 [网关配置](../../server/gate/option.go)、[启动校验与 HTTP 处理](../../server/gate/gate.go)、[连接回调](../../server/gate/gate_handler.go) 和 [配置错误](../../errors/errors.go)。同步更新 [网关示例](../../examples/gate/cmd/main.go)、[README](../../README.md)、网关测试，以及第 2 步的提交状态与后续链接。没有新增依赖或兼容分支。
 
-需求、实施、验收证据和审查状态已同步。用户已批准提交第 3 步，提交说明为 `fix: authenticate gate requests before websocket upgrade`。提交完成后呈现第 4 步应用就绪与失败清理方案，等待用户确认后实施。
+需求、实施、验收证据和审查状态已同步。第 3 步已提交为 `0d0a8a1`，提交说明为 `fix: authenticate gate requests before websocket upgrade`。后续从 [第 4 步进度](../application-lifecycle/progress.md) 继续，第 5 至 16 步待确认。

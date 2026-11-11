@@ -63,8 +63,12 @@ func (b *Broker) Pub(ctx context.Context, subject string, data []byte, opts ...b
 	return b.nc.PublishMsg(m)
 }
 
-// Sub 订阅主题. 支持队列组订阅，上下文取消时自动退订
+// Sub 订阅主题，等待服务端确认后返回。支持队列组订阅，上下文取消时自动退订。
 func (b *Broker) Sub(ctx context.Context, subject string, handler broker.Handler, opts ...broker.SubscribeOption) (broker.Subscription, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	var so broker.SubscribeOptions
 	for _, opt := range opts {
 		opt(&so)
@@ -95,14 +99,19 @@ func (b *Broker) Sub(ctx context.Context, subject string, handler broker.Handler
 		return nil, err
 	}
 
+	flushCtx, cancel := context.WithTimeout(ctx, b.opts.connectTimeout)
+	defer cancel()
+	if err := b.nc.FlushWithContext(flushCtx); err != nil {
+		_ = sub.Unsubscribe()
+		return nil, err
+	}
+
 	// ctx 取消时自动退订（避免调用方遗忘）
-	if ctx != nil {
-		if done := ctx.Done(); done != nil {
-			go func() {
-				<-done
-				_ = sub.Unsubscribe()
-			}()
-		}
+	if done := ctx.Done(); done != nil {
+		go func() {
+			<-done
+			_ = sub.Unsubscribe()
+		}()
 	}
 
 	return &subscription{sub: sub}, nil

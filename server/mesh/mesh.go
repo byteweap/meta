@@ -25,6 +25,9 @@ type Mesh struct {
 	appID   string // application ID
 	appName string // application name
 	running bool
+	started bool
+	stopped bool
+	ready   chan struct{}
 
 	opts          *options
 	routes        sync.Map // key: cmd<<32|version (uint64), value: MessageHandler
@@ -49,13 +52,16 @@ func New(opts ...Option) *Mesh {
 	for _, opt := range opts {
 		opt(o)
 	}
-	return &Mesh{opts: o}
+	return &Mesh{opts: o, ready: make(chan struct{})}
 }
 
 // Kind 返回服务类型
 func (*Mesh) Kind() server.Kind {
 	return server.KindMesh
 }
+
+// Ready 返回本次启动的就绪信号。
+func (m *Mesh) Ready() <-chan struct{} { return m.ready }
 
 // Start 启动 Mesh 服务
 func (m *Mesh) Start(ctx context.Context) error {
@@ -71,9 +77,17 @@ func (m *Mesh) Start(ctx context.Context) error {
 		return es.ErrLocatorRequired
 	}
 	m.mu.Lock()
-	if m.running {
+	if m.stopped {
 		m.mu.Unlock()
-		return fmt.Errorf("mesh already running")
+		return context.Canceled
+	}
+	if m.started {
+		m.mu.Unlock()
+		return fmt.Errorf("mesh already started")
+	}
+	if err := ctx.Err(); err != nil {
+		m.mu.Unlock()
+		return err
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	m.ctx = runCtx
@@ -82,9 +96,11 @@ func (m *Mesh) Start(ctx context.Context) error {
 	m.appName = app.Name()
 	m.done = make(chan struct{})
 	m.running = true
+	m.started = true
 	m.mu.Unlock()
 
 	defer func() {
+		cancel()
 		m.mu.Lock()
 		if m.done != nil {
 			close(m.done)
@@ -102,6 +118,7 @@ func (m *Mesh) Start(ctx context.Context) error {
 // Stop 停止 Mesh 服务
 func (m *Mesh) Stop(ctx context.Context) error {
 	m.mu.Lock()
+	m.stopped = true
 	if !m.running {
 		m.mu.Unlock()
 		return nil
@@ -259,8 +276,6 @@ func (m *Mesh) loop() error {
 		return err
 	}
 
-	log.Infof("%s.%s server start success", m.appName, m.appID)
-
 	defer func() {
 		// 异常捕获,防止崩溃
 		async.Recover(func(r any) {
@@ -270,6 +285,19 @@ func (m *Mesh) loop() error {
 			log.Errorf("mesh close subscription error: %v", err)
 		}
 	}()
+	m.mu.Lock()
+	if m.stopped {
+		m.mu.Unlock()
+		return context.Canceled
+	}
+	if err := m.ctx.Err(); err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	close(m.ready)
+	m.mu.Unlock()
+
+	log.Infof("%s.%s server start success", m.appName, m.appID)
 
 	for {
 		select {

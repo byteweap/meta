@@ -15,8 +15,6 @@ import (
 	"github.com/byteweap/meta"
 	"github.com/byteweap/meta/component/broker"
 	"github.com/byteweap/meta/component/log"
-	"github.com/byteweap/meta/component/registry"
-	"github.com/byteweap/meta/component/selector"
 	es "github.com/byteweap/meta/errors"
 	"github.com/byteweap/meta/internal/cluster"
 	"github.com/byteweap/meta/pkg/endpoint"
@@ -47,10 +45,9 @@ type Gate struct {
 	stopCtx     context.Context
 	stopErr     error
 
-	mu        sync.RWMutex
-	selectors map[string]selector.Selector // 服务节点选择器 key: 服务名
-	watchers  map[string]registry.Watcher  // 服务节点监听器 key: 服务名
-	sfg       singleflight.Group
+	mu       sync.RWMutex
+	services map[string]*serviceDiscovery // 服务名到已初始化的发现任务
+	sfg      singleflight.Group
 }
 
 var _ server.Server = (*Gate)(nil)
@@ -63,15 +60,14 @@ func New(opts ...Option) *Gate {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Gate{
-		ctx:       ctx,
-		cancel:    cancel,
-		opts:      o,
-		Server:    &http.Server{},
-		sessions:  newSessions(),
-		selectors: make(map[string]selector.Selector),
-		watchers:  make(map[string]registry.Watcher),
-		ready:     make(chan struct{}),
-		stopDone:  make(chan struct{}),
+		ctx:      ctx,
+		cancel:   cancel,
+		opts:     o,
+		Server:   &http.Server{},
+		sessions: newSessions(),
+		services: make(map[string]*serviceDiscovery),
+		ready:    make(chan struct{}),
+		stopDone: make(chan struct{}),
 	}
 }
 
@@ -302,93 +298,4 @@ func (g *Gate) loop() error {
 // Subject 获取当前服务主题
 func (g *Gate) Subject(fromApp string) string {
 	return cluster.Subject(g.opts.prefix, fromApp, g.appName, g.appID)
-}
-
-// 确保选择器
-func (g *Gate) ensure(service string) (selector.Selector, error) {
-	if !g.beginTask() {
-		return nil, context.Canceled
-	}
-	defer g.tasks.Done()
-	g.mu.RLock()
-	sel := g.selectors[service]
-	g.mu.RUnlock()
-	if sel != nil {
-		return sel, nil
-	}
-
-	v, err, _ := g.sfg.Do(service, func() (any, error) {
-		g.mu.RLock()
-		if existing := g.selectors[service]; existing != nil {
-			g.mu.RUnlock()
-			return existing, nil
-		}
-		g.mu.RUnlock()
-
-		created := g.opts.selectorFunc()
-		w, err := g.opts.discovery.Watch(g.ctx, service)
-		if err != nil {
-			log.Errorf("[websocket] ensure watch service error, service: %v, err: %v", service, err)
-			return nil, err
-		}
-
-		g.lifecycleMu.Lock()
-		if g.stopped || g.ctx.Err() != nil {
-			g.lifecycleMu.Unlock()
-			closeErr := w.Stop()
-			g.addStopError(closeErr)
-			return nil, errors.Join(context.Canceled, closeErr)
-		}
-		g.mu.Lock()
-		if existing := g.selectors[service]; existing != nil {
-			g.mu.Unlock()
-			g.lifecycleMu.Unlock()
-			if stopErr := w.Stop(); stopErr != nil {
-				g.addStopError(stopErr)
-				log.Errorf("[websocket] ensure stop redundant watcher error, service: %v, err: %v", service, stopErr)
-			}
-			return existing, nil
-		}
-		g.selectors[service] = created
-		g.watchers[service] = w
-		g.mu.Unlock()
-		g.tasks.Add(1)
-		g.lifecycleMu.Unlock()
-
-		go func() {
-			defer g.tasks.Done()
-			g.watchSelector(created, w)
-		}()
-		return created, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return v.(selector.Selector), nil
-}
-
-func (g *Gate) watchSelector(sel selector.Selector, w registry.Watcher) {
-	for {
-		select {
-		case <-g.ctx.Done():
-			return
-		default:
-			instances, err := w.Next()
-			if err != nil {
-				return
-			}
-			nodes := make([]selector.Node, 0, len(instances))
-			for _, instance := range instances {
-				nodes = append(nodes,
-					selector.NewNode(
-						instance.ID,
-						instance.Name,
-						instance.Version,
-						instance.Metadata,
-					),
-				)
-			}
-			sel.Update(nodes) // 更新节点
-		}
-	}
 }

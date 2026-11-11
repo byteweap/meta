@@ -10,7 +10,6 @@ import (
 	"github.com/olahol/melody"
 
 	"github.com/byteweap/meta/component/log"
-	"github.com/byteweap/meta/component/registry"
 )
 
 const disconnectTimeout = 10 * time.Second
@@ -80,15 +79,15 @@ func (g *Gate) shutdown(ctx context.Context, ln net.Listener, ws *melody.Melody)
 	}
 
 	g.mu.Lock()
-	watchers := make([]registry.Watcher, 0, len(g.watchers))
-	for _, watcher := range g.watchers {
-		watchers = append(watchers, watcher)
+	services := make([]*serviceDiscovery, 0, len(g.services))
+	for _, service := range g.services {
+		services = append(services, service)
 	}
-	clear(g.watchers)
-	clear(g.selectors)
+	clear(g.services)
 	g.mu.Unlock()
-	for _, watcher := range watchers {
-		closeResource(watcher.Stop)
+	for _, service := range services {
+		// 每个发现任务的一次关闭同时负责记录错误。
+		closing.Go(func() { _ = service.stop() })
 	}
 
 	g.tasks.Wait()

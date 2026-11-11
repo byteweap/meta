@@ -121,9 +121,13 @@ message IMessage {
 Gate 根据 `IMessage.service` 查找目标业务服务：
 
 1. 先通过 `locator.Node(ctx, uid, service)` 查询玩家是否已经绑定到某个业务节点。
-2. 如果没有绑定，则通过 `registry.Watch(service)` 维护节点列表，并用 `selector.Selector` 选择一个节点。
+2. 如果没有绑定，首次建立 `registry.Watch(service)` 后同步调用 `GetService` 初始化节点列表，再用 `selector.Selector` 选点；后续由监听更新。
 3. 使用 `cluster.BuildHeader` 写入 uid、事件类型、reply subject、来源服务和目标服务。
 4. 发布到目标 subject：`<prefix>.<gateName>.<service>.<nodeID>`。
+
+同服务的并发请求共用一次发现初始化。空快照正常返回无可用节点，后续更新仍可恢复路由；初始化失败时释放资源，下一请求可重试。监听出错后清空旧节点并移除对应缓存，由后续请求重新建立发现任务。
+
+发现任务的关闭只执行一次，初始化与关闭都纳入 Gate.Stop 等待。旧监听关闭阻塞不会阻止新请求重建，关闭错误会保留在停止结果中。GetService 与 Watch 没有共同的版本协议，因此快照查询和后续通知之间不提供强一致保证。
 
 Mesh 回包到 Gate 后，Gate 根据 header 中的 uid 找到本地 WebSocket session，并直接 `WriteBinary` 给客户端。
 

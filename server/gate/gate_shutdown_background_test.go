@@ -168,12 +168,7 @@ func TestGateShutdownBackgroundClosesLateWatcher(t *testing.T) {
 	require.Equal(t, int32(1), watchCalls.Load())
 	require.Equal(t, int32(1), closeCalls.Load())
 	require.Zero(t, nextCalls.Load())
-	g.mu.RLock()
-	_, cachedWatcher := g.watchers["game"]
-	_, cachedSelector := g.selectors["game"]
-	g.mu.RUnlock()
-	require.False(t, cachedWatcher)
-	require.False(t, cachedSelector)
+	require.Nil(t, g.cachedDiscovery("game"))
 }
 
 func TestGateShutdownBackgroundStopsWatchersIndependently(t *testing.T) {

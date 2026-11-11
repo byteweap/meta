@@ -166,26 +166,6 @@ func (l *testLocator) Session(_ context.Context, uid int64, service string) (loc
 	return l.sessions[testSessionKey{uid, service}], nil
 }
 
-type testWatcher struct {
-	mu        sync.Mutex
-	stopCalls int
-	nextErr   error
-}
-
-func (w *testWatcher) Next() ([]*registry.ServiceInstance, error) {
-	if w.nextErr != nil {
-		return nil, w.nextErr
-	}
-	return []*registry.ServiceInstance{}, nil
-}
-
-func (w *testWatcher) Stop() error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.stopCalls++
-	return nil
-}
-
 type testRegistry struct {
 	mu         sync.Mutex
 	watchCalls int
@@ -305,41 +285,31 @@ func TestGateOptions(t *testing.T) {
 }
 
 func TestEnsureRetriesAfterWatchFailure(t *testing.T) {
-	watcher := &testWatcher{nextErr: errors.New("stop")}
+	watcher := newInitialDiscoveryWatcher()
 	discovery := &testRegistry{
 		watchErrs: []error{errors.New("watch failed"), nil},
 		watcher:   watcher,
 	}
 
-	g := New(
-		Discovery(discovery),
-		SelectorFunc(func() selector.Selector { return &testSelector{} }),
-	)
-	g.ctx = context.Background()
+	g := newInitialDiscoveryGate(t, discovery, &testBroker{})
 
 	_, err := g.ensure("match")
 	require.EqualError(t, err, "watch failed")
-	require.Nil(t, g.selectors["match"])
-	require.Nil(t, g.watchers["match"])
+	require.Nil(t, g.cachedDiscovery("match"))
 
 	sel, err := g.ensure("match")
 	require.NoError(t, err)
 	require.NotNil(t, sel)
-	require.NotNil(t, g.selectors["match"])
-	require.NotNil(t, g.watchers["match"])
+	require.NotNil(t, g.cachedDiscovery("match"))
 	require.Equal(t, 2, discovery.watchCalls)
 }
 
 func TestEnsureSingleflightDeduplicatesConcurrentWatch(t *testing.T) {
 	discovery := &testRegistry{
-		watcher:   &testWatcher{nextErr: errors.New("stop")},
+		watcher:   newInitialDiscoveryWatcher(),
 		watchWait: make(chan struct{}),
 	}
-	g := New(
-		Discovery(discovery),
-		SelectorFunc(func() selector.Selector { return &testSelector{} }),
-	)
-	g.ctx = context.Background()
+	g := newInitialDiscoveryGate(t, discovery, &testBroker{})
 
 	const callers = 8
 	results := make(chan error, callers)
@@ -362,8 +332,7 @@ func TestEnsureSingleflightDeduplicatesConcurrentWatch(t *testing.T) {
 		require.NoError(t, err)
 	}
 	require.Equal(t, 1, discovery.watchCalls)
-	require.NotNil(t, g.selectors["match"])
-	require.NotNil(t, g.watchers["match"])
+	require.NotNil(t, g.cachedDiscovery("match"))
 }
 
 func TestHandleConnectRollsBackSessionWhenBindFails(t *testing.T) {

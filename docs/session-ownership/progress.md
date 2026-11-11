@@ -55,4 +55,4 @@
 
 实现涉及 [公共接口](../../component/locator/locator.go)、[Redis 状态](../../contrib/locator/redis/locator.go)、[Gate 连接切换](../../server/gate/gate_handler.go)、[按用户串行化](../../server/gate/session.go)、[事件头](../../internal/cluster/header.go) 和 [Mesh 校验](../../server/mesh/mesh.go)，并同步组件使用说明、原有测试及第 6 步提交记录。
 
-需求、决策、实施、验收证据及审查结果已同步，用户已确认提交本步骤，提交说明为 `fix: preserve session ownership across reconnects`。下一项工作为提出第 8 步发现初始化与恢复方案并等待用户确认；第 8 步尚未实施。
+需求、决策、实施、验收证据及审查结果已同步，用户确认后已提交为 `e44e3cb`（`fix: preserve session ownership across reconnects`）。用户已确认第 8 步发现初始化与恢复方案，当前实施与验证见 [第 8 步进度](../gate-discovery/progress.md)。

@@ -2,7 +2,6 @@ package consul
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -70,28 +69,13 @@ func (r *Registry) GetService(ctx context.Context, name string) ([]*registry.Ser
 	set := r.registry[name]
 	r.lock.RUnlock()
 
-	getRemote := func() []*registry.ServiceInstance {
-		services, _, err := r.cli.Service(ctx, name, 0, true)
-		if err == nil && len(services) > 0 {
-			return services
+	if set != nil {
+		if services, ok := set.services.Load().([]*registry.ServiceInstance); ok {
+			return services, nil
 		}
-		return nil
 	}
-
-	if set == nil {
-		if s := getRemote(); len(s) > 0 {
-			return s, nil
-		}
-		return nil, fmt.Errorf("service %s not resolved in registry", name)
-	}
-	ss, _ := set.services.Load().([]*registry.ServiceInstance)
-	if ss == nil {
-		if s := getRemote(); len(s) > 0 {
-			return s, nil
-		}
-		return nil, fmt.Errorf("service %s not found in registry", name)
-	}
-	return ss, nil
+	services, _, err := r.cli.Service(ctx, name, 0, true)
+	return services, err
 }
 
 // ListServices 返回所有服务
@@ -101,8 +85,8 @@ func (r *Registry) ListServices() (allServices map[string][]*registry.ServiceIns
 	allServices = make(map[string][]*registry.ServiceInstance)
 	for name, set := range r.registry {
 		var services []*registry.ServiceInstance
-		ss, _ := set.services.Load().([]*registry.ServiceInstance)
-		if ss == nil {
+		ss, ok := set.services.Load().([]*registry.ServiceInstance)
+		if !ok {
 			continue
 		}
 		services = append(services, ss...)
@@ -144,9 +128,8 @@ func (r *Registry) Watch(ctx context.Context, name string) (registry.Watcher, er
 	set.watcher[w] = struct{}{}
 	set.lock.Unlock()
 
-	ss, _ := set.services.Load().([]*registry.ServiceInstance)
-	if len(ss) > 0 {
-		// 如果已有缓存数据，先推送一次，避免首次 watch 一直阻塞
+	if _, cached := set.services.Load().([]*registry.ServiceInstance); cached {
+		// 已有快照（包括空列表）时先通知一次，避免首次 Next 一直阻塞。
 		select {
 		case w.event <- struct{}{}:
 		default:
@@ -177,9 +160,7 @@ func (r *Registry) resolve(ctx context.Context, ss *serviceSet) error {
 	if err != nil {
 		return err
 	}
-	if len(services) > 0 {
-		ss.broadcast(services)
-	}
+	ss.broadcast(services)
 
 	go func() {
 		ticker := time.NewTicker(time.Second)
@@ -194,9 +175,8 @@ func (r *Registry) resolve(ctx context.Context, ss *serviceSet) error {
 					}
 					continue
 				}
-				if len(tmpService) != 0 && tmpIdx != idx {
-					services = tmpService
-					ss.broadcast(services)
+				if tmpIdx != idx {
+					ss.broadcast(tmpService)
 				}
 				idx = tmpIdx
 			case <-ss.ctx.Done():

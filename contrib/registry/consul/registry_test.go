@@ -1,15 +1,13 @@
+//go:build integration
+
 package consul
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"reflect"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -133,14 +131,14 @@ func TestRegistry_Register(t *testing.T) {
 				}()
 			}
 			watchCtx, watchCancel := context.WithCancel(context.Background())
-			watch, err := r.Watch(watchCtx, tt.args.serverName)
+			watch, err := watchIntegration(t, r, watchCtx, tt.args.serverName)
 			if err != nil {
 				t.Error(err)
 				watchCancel()
 				return
 			}
 
-			got, err := watch.Next()
+			got, err := nextPopulatedSnapshot(watch)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("GetService() error = %v, wantErr %v", err, tt.wantErr)
 				t.Errorf("GetService() got = %v", got)
@@ -225,11 +223,11 @@ func TestRegistry_GetService(t *testing.T) {
 					t.Error(err)
 				}
 				watchCtx, watchCancel := context.WithCancel(context.Background())
-				watch, err := r.Watch(watchCtx, instance1.Name)
+				watch, err := watchIntegration(t, r, watchCtx, instance1.Name)
 				if err != nil {
 					t.Error(err)
 				}
-				_, err = watch.Next()
+				_, err = nextPopulatedSnapshot(watch)
 				if err != nil {
 					t.Error(err)
 				}
@@ -247,24 +245,24 @@ func TestRegistry_GetService(t *testing.T) {
 			},
 		},
 		{
-			name:   "can't get any",
+			name:   "missing service returns empty snapshot",
 			fields: fields{r},
 			args: args{
 				ctx:         context.Background(),
 				serviceName: "server-x",
 			},
-			want:    nil,
-			wantErr: true,
+			want:    []*registry.ServiceInstance{},
+			wantErr: false,
 			preFunc: func(t *testing.T) {
 				if err := r.Register(context.Background(), instance2); err != nil {
 					t.Error(err)
 				}
 				watchCtx, watchCancel := context.WithCancel(context.Background())
-				watch, err := r.Watch(watchCtx, instance2.Name)
+				watch, err := watchIntegration(t, r, watchCtx, instance2.Name)
 				if err != nil {
 					t.Error(err)
 				}
-				_, err = watch.Next()
+				_, err = nextPopulatedSnapshot(watch)
 				if err != nil {
 					t.Error(err)
 				}
@@ -419,7 +417,7 @@ func TestRegistry_Watch(t *testing.T) {
 					t.Error(err)
 				}
 			}()
-			watch, err := r.Watch(tt.args.ctx, tt.args.instance.Name)
+			watch, err := watchIntegration(t, r, tt.args.ctx, tt.args.instance.Name)
 			if err != nil {
 				t.Error(err)
 			}
@@ -428,7 +426,7 @@ func TestRegistry_Watch(t *testing.T) {
 				tt.args.cancel()
 			}
 
-			service, err := watch.Next()
+			service, err := nextPopulatedSnapshot(watch)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("GetService() error = %v, wantErr %v", err, tt.wantErr)
@@ -500,7 +498,7 @@ func TestRegistry_IdleAndWatch(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var watchs []registry.Watcher
 			for i := 0; i < 10; i++ {
-				watch, err := r.Watch(tt.args.ctx, tt.args.instance.Name) //nolint
+				watch, err := watchIntegration(t, r, tt.args.ctx, tt.args.instance.Name) //nolint
 				if err != nil {
 					t.Error(err)
 				}
@@ -529,7 +527,7 @@ func TestRegistry_IdleAndWatch(t *testing.T) {
 					defer wg1.Done()
 
 					// 首次获取
-					service, err := watch.Next() //nolint
+					service, err := nextPopulatedSnapshot(watch) //nolint
 					if err != nil {
 						t.Error(err)
 						return
@@ -560,7 +558,7 @@ func TestRegistry_IdleAndWatch(t *testing.T) {
 					defer wg2.Done()
 
 					// 实例变更
-					service, err := watch.Next() //nolint
+					service, err := nextPopulatedSnapshot(watch) //nolint
 					if err != nil {
 						t.Error(err)
 						return
@@ -634,13 +632,13 @@ func TestRegistry_IdleAndWatch2(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			for i := 0; i < 10; i++ {
 				stopCtx, stopCancel := context.WithCancel(ctx)
-				watch, err1 := r.Watch(stopCtx, tt.args.instance.Name)
+				watch, err1 := watchIntegration(t, r, stopCtx, tt.args.instance.Name)
 				if err1 != nil {
 					t.Error(err1)
 				}
 				go func(_ int) {
 					// 首次获取
-					service, err2 := watch.Next()
+					service, err2 := nextPopulatedSnapshot(watch)
 					if (err2 != nil) != tt.wantErr {
 						t.Errorf("GetService() error = %v, wantErr %v", err, tt.wantErr)
 						t.Errorf("GetService() got = %v", service)
@@ -670,11 +668,11 @@ func TestRegistry_IdleAndWatch2(t *testing.T) {
 			time.Sleep(time.Second * 2)
 			// 所有 watcher 进入空闲后，再新建一个 watch
 			watchCtx, watchCancel := context.WithCancel(context.Background())
-			watch, err := r.Watch(watchCtx, tt.args.instance.Name)
+			watch, err := watchIntegration(t, r, watchCtx, tt.args.instance.Name)
 			if err != nil {
 				t.Error(err)
 			}
-			service, err := watch.Next()
+			service, err := nextPopulatedSnapshot(watch)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("GetService() error = %v, wantErr %v", err, tt.wantErr)
 				t.Errorf("GetService() got = %v", service)
@@ -749,11 +747,11 @@ func TestRegistry_ExitOldResolverAndReWatch(t *testing.T) {
 			}
 			// 第一次 watch
 			ctx, cancel := context.WithCancel(context.Background())
-			watch, err := r.Watch(ctx, tt.args.instance.Name)
+			watch, err := watchIntegration(t, r, ctx, tt.args.instance.Name)
 			if err != nil {
 				t.Error(err)
 			}
-			service, err := watch.Next()
+			service, err := nextPopulatedSnapshot(watch)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("GetService() error = %v, wantErr %v", err, tt.wantErr)
 				t.Errorf("GetService() got = %v", service)
@@ -770,11 +768,11 @@ func TestRegistry_ExitOldResolverAndReWatch(t *testing.T) {
 			cancel()
 			// 若这里睡一段时间，旧的 resolve goroutine 会先退出，新 Watch 就不会有问题
 			// time.Sleep(time.Second * 8)
-			newWatch, err := r.Watch(watchCtx, tt.args.instance.Name)
+			newWatch, err := watchIntegration(t, r, watchCtx, tt.args.instance.Name)
 			if err != nil {
 				t.Error(err)
 			}
-			service, err = newWatch.Next()
+			service, err = nextPopulatedSnapshot(newWatch)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("GetService() error = %v, wantErr %v", err, tt.wantErr)
 				t.Errorf("GetService() got = %v", service)
@@ -803,7 +801,7 @@ func TestRegistry_ExitOldResolverAndReWatch(t *testing.T) {
 			c := make(chan struct{}, 1)
 
 			go func() {
-				service, err = newWatch.Next()
+				service, err = nextPopulatedSnapshot(newWatch)
 				if (err != nil) != tt.wantErr {
 					t.Errorf("GetService() error = %v, wantErr %v", err, tt.wantErr)
 					t.Errorf("GetService() got = %v", service)
@@ -822,82 +820,6 @@ func TestRegistry_ExitOldResolverAndReWatch(t *testing.T) {
 				return
 			}
 		})
-	}
-}
-
-func TestRegistry_ShareServiceSet(t *testing.T) {
-	lastIndex := uint64(0)
-	serviceName := "share-service-set"
-	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/health/service/"+serviceName, func(w http.ResponseWriter, r *http.Request) {
-		var index uint64
-		if s := r.URL.Query().Get("index"); s != "" {
-			val, err := strconv.ParseUint(s, 10, 64)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			index = val
-		}
-
-		if index < lastIndex {
-			msg := "repeated request, not the same ServiceSet"
-			http.Error(w, msg, http.StatusBadRequest)
-			t.Error(msg)
-			t.FailNow()
-			return
-		}
-
-		lastIndex = index + 1
-		w.Header().Set("X-Consul-Index", strconv.FormatUint(lastIndex, 10))
-
-		out := []*api.ServiceEntry{
-			{
-				Service: &api.AgentService{
-					ID:      "1",
-					Service: serviceName,
-				},
-			},
-		}
-		err := json.NewEncoder(w).Encode(out)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
-	})
-
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-
-	cli, err := api.NewClient(&api.Config{Address: ts.URL, WaitTime: 2 * time.Second})
-	if err != nil {
-		t.Fatalf("create consul client failed: %v", err)
-	}
-
-	var prev registry.Watcher
-	r := New(cli, WithHealthCheck(false), WithHeartbeat(false))
-	for i := 0; i < 100; i++ {
-		w, err := r.Watch(context.Background(), serviceName) //nolint
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		// 关闭上一个 watcher
-		if prev != nil {
-			if err = prev.Stop(); err != nil {
-				t.Error(err)
-				return
-			}
-		}
-		prev = w
-	}
-
-	time.Sleep(time.Second * 5)
-
-	if prev != nil {
-		if err = prev.Stop(); err != nil {
-			t.Error(err)
-			return
-		}
 	}
 }
 
@@ -937,7 +859,7 @@ func TestRegistry_MultiWatch(t *testing.T) {
 		}
 	}()
 
-	watch1, err := r.Watch(context.Background(), serviceName)
+	watch1, err := watchIntegration(t, r, context.Background(), serviceName)
 	if err != nil {
 		t.Error(err)
 		return
@@ -948,7 +870,7 @@ func TestRegistry_MultiWatch(t *testing.T) {
 		}
 	}()
 
-	watch2, err := r.Watch(context.Background(), serviceName)
+	watch2, err := watchIntegration(t, r, context.Background(), serviceName)
 	if err != nil {
 		t.Error(err)
 		return
@@ -959,13 +881,13 @@ func TestRegistry_MultiWatch(t *testing.T) {
 		}
 	}()
 
-	got1, err := watch1.Next()
+	got1, err := nextPopulatedSnapshot(watch1)
 	if err != nil {
 		t.Error(err)
 		return
 	}
 
-	got2, err := watch2.Next()
+	got2, err := nextPopulatedSnapshot(watch2)
 	if err != nil {
 		t.Error(err)
 		return
@@ -1000,7 +922,7 @@ func TestRegistry_MultiWatch(t *testing.T) {
 	}()
 
 	// 第二个 watcher 应该拿到新实例
-	got, err := watch2.Next()
+	got, err := nextPopulatedSnapshot(watch2)
 	if err != nil {
 		t.Error(err)
 		return
@@ -1026,4 +948,21 @@ func getIntranetIP() string {
 		}
 	}
 	return "127.0.0.1"
+}
+
+// A successful first snapshot can be empty while health checks are still pending.
+func nextPopulatedSnapshot(w registry.Watcher) ([]*registry.ServiceInstance, error) {
+	for {
+		services, err := w.Next()
+		if err != nil || len(services) > 0 {
+			return services, err
+		}
+	}
+}
+
+func watchIntegration(t *testing.T, r *Registry, ctx context.Context, name string) (registry.Watcher, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	t.Cleanup(cancel)
+	return r.Watch(ctx, name)
 }

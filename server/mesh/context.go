@@ -10,7 +10,6 @@ import (
 	"github.com/byteweap/meta/component/log"
 	"github.com/byteweap/meta/envelope"
 	"github.com/byteweap/meta/internal/cluster"
-	"github.com/byteweap/meta/pkg/lang"
 )
 
 // Context 网关消息上下文
@@ -190,7 +189,10 @@ func (c *Context) OkResp(args ...proto.Message) {
 
 // ErrResp 返回错误响应
 func (c *Context) ErrResp(code int, args ...string) {
-	tip := lang.If(len(args) > 0, args[0], "mesh internal error")
+	tip := "mesh internal error"
+	if len(args) > 0 {
+		tip = args[0]
+	}
 
 	out := &envelope.OMessage{
 		Header: &envelope.Header{

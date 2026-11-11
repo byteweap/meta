@@ -52,4 +52,4 @@
 
 发现逻辑集中在 [gate_discovery.go](../../server/gate/gate_discovery.go)，由单个缓存项管理选择器与监听器；[Gate](../../server/gate/gate.go) 和 [停止流程](../../server/gate/gate_shutdown.go) 同步使用该资源模型。更新两组新回归、既有测试、[README](../../README.md) 及第 7 步提交记录。
 
-需求、决策、实现、验证和审查状态已同步，用户已确认提交本步骤，提交说明为 `fix: initialize and recover gate service discovery`。下一项工作为提出第 9 步默认错误提示方案并等待用户确认；第 9 步尚未实施。
+需求、决策、实现、验证和审查状态已同步，用户确认后已提交为 `e815a1d`（`fix: initialize and recover gate service discovery`）。用户已确认第 9 步默认错误提示方案，实施与验证见 [第 9 步记录](../mesh-error-response/change.md)。

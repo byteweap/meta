@@ -3,12 +3,14 @@ package gate
 import (
 	"errors"
 	"net/http"
+	"runtime/debug"
 
 	"github.com/byteweap/meta/component/broker"
 	"github.com/byteweap/meta/component/log"
 	"github.com/byteweap/meta/encoding/proto"
 	"github.com/byteweap/meta/envelope"
 	"github.com/byteweap/meta/internal/cluster"
+	"github.com/byteweap/meta/pkg/async"
 	"github.com/byteweap/meta/pkg/conv"
 )
 
@@ -44,6 +46,9 @@ func (g *Gate) handlePubSubMessage(msg *broker.Message) {
 
 // 处理来自其它服务的消息
 func (g *Gate) handleMessage(msg *broker.Message) {
+	defer async.Recover(func(r any) {
+		log.Errorf("gate message handler panic: %v\n%s", r, debug.Stack())
+	})
 	if msg.Reply != "" {
 		g.handleRequestReplyMessage(msg)
 	} else {

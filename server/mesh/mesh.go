@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"sync"
 
 	"github.com/byteweap/meta"
@@ -277,10 +278,6 @@ func (m *Mesh) loop() error {
 	}
 
 	defer func() {
-		// 异常捕获,防止崩溃
-		async.Recover(func(r any) {
-			log.Errorf("mesh handler panic error: %v", r)
-		})
 		if err := sub.Close(); err != nil {
 			log.Errorf("mesh close subscription error: %v", err)
 		}
@@ -397,7 +394,7 @@ func (m *Mesh) handlerRequestReplyMessage(msg *broker.Message) {
 	}
 	cmd, version := header.Get("cmd"), header.Get("version")
 	if handler, ok := m.requestRoutes.Load(requestRouteKey(cmd, version)); ok {
-		data, tip, code := handler.(RPCMessageHandler)(m, msg)
+		data, tip, code := m.invokeRPC(handler.(RPCMessageHandler), msg)
 		m.replyRequestResult(msg, data, tip, code)
 	} else {
 		if err := m.errReply(msg, 404, fmt.Sprintf("cmd:%s version:%s not found", cmd, version)); err != nil {
@@ -460,6 +457,9 @@ func (m *Mesh) handlerPubSubMessage(msg *broker.Message) {
 
 // 处理消息
 func (m *Mesh) handlerMessage(msg *broker.Message) {
+	defer async.Recover(func(r any) {
+		log.Errorf("mesh message handler panic: %v\n%s", r, debug.Stack())
+	})
 	if msg.Reply != "" {
 		m.handlerRequestReplyMessage(msg)
 	} else {

@@ -19,7 +19,6 @@ import (
 	"github.com/byteweap/meta/component/selector"
 	es "github.com/byteweap/meta/errors"
 	"github.com/byteweap/meta/internal/cluster"
-	"github.com/byteweap/meta/pkg/async"
 	"github.com/byteweap/meta/pkg/endpoint"
 	"github.com/byteweap/meta/pkg/host"
 	"github.com/byteweap/meta/server"
@@ -310,10 +309,6 @@ func (g *Gate) loop() error {
 	// 处理收到的消息
 	go func(ctx context.Context, sub broker.Subscription, ch <-chan *broker.Message) {
 		defer func() {
-			// 异常捕获,防止崩溃
-			async.Recover(func(r any) {
-				log.Errorf("gate handler panic error: %v", r)
-			})
 			if err := sub.Close(); err != nil {
 				log.Errorf("gate close subscription error: %v", err)
 			}

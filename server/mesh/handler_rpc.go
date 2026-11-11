@@ -4,14 +4,26 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"runtime/debug"
 
 	"github.com/byteweap/meta/component/broker"
+	"github.com/byteweap/meta/component/log"
 	"github.com/byteweap/meta/encoding/proto"
+	"github.com/byteweap/meta/pkg/async"
 )
 
 type RPCMessageHandler func(*Mesh, *broker.Message) ([]byte, string, int)
 
 const unmarshalPayloadError = "unmarshal payload error"
+
+// invokeRPC 只负责处理器调用，异常结果仍由调用方统一回复。
+func (m *Mesh) invokeRPC(handler RPCMessageHandler, msg *broker.Message) (data []byte, tip string, code int) {
+	defer async.Recover(func(r any) {
+		data, tip, code = nil, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError
+		log.Errorf("mesh RPC handler panic: %v\n%s", r, debug.Stack())
+	})
+	return handler(m, msg)
+}
 
 // WrapRPC 路由处理函数包装器
 // 统一处理request-reply消息,处理系统事件,自动解析业务参数 payload

@@ -133,6 +133,8 @@ Mesh 启动时会校验 `Broker` 和 `Locator`，然后订阅：
 - `Reply == ""`：pub-sub 消息，主要用于 Gate 转发的客户端业务消息和系统事件。
 - `Reply != ""`：request-reply 消息，用于服务间 RPC。
 
+Gate/Mesh 在每条 broker 消息的处理入口恢复 panic，记录异常及堆栈后继续处理下一条消息。该边界覆盖当前 goroutine 内的消息处理及 Mesh 系统事件回调；业务自行启动的 goroutine 应设置自己的恢复边界。
+
 ### 业务路由
 
 客户端业务消息由 `cmd/version` 共同定位处理器。底层路由键使用 `uint64(cmd)<<32 | uint64(version)`，避免字符串拼接开销。
@@ -188,6 +190,8 @@ RPC 路由键为 `cmd.version`。`WrapRPC[T]` 会反序列化请求体并创建 
 - `[]byte`：响应数据。
 - `string`：提示信息。
 - `int`：状态码，`200` 表示成功。
+
+RPC 业务处理器发生 panic 时，框架返回空数据、`500` 和通用提示 `Internal Server Error`，通过现有结果出口回复一次。回复传输本身发生 panic 时记录异常，不重复发送；后续消息仍继续处理。恢复不会撤销处理器已经完成的外部副作用。
 
 调用方使用：
 

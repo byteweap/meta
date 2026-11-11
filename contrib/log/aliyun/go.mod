@@ -1,6 +1,6 @@
 module github.com/byteweap/meta/contrib/log/aliyun
 
-go 1.26.1
+go 1.27.1
 
 require (
 	github.com/aliyun/aliyun-log-go-sdk v0.1.115

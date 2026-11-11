@@ -318,6 +318,7 @@ func EnterGame(ctx *mesh.Context, req *EnterGameReq) {
 ## 开发命令
 
 ```bash
+make check      # 逐模块构建整个项目，使用只读依赖模式
 make test       # 运行所有测试
 make tidy       # 整理所有 Go module
 make envelope   # 根据 idl/envelope/envelope.proto 重新生成 protobuf

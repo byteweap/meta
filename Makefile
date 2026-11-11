@@ -1,9 +1,18 @@
 SHELL := /usr/bin/env bash
 
-.PHONY: test lint tidy envelope help
+.PHONY: check test lint tidy envelope help
 
 test:
 	go test -v ./...
+
+check:
+	@set -euo pipefail; \
+	find . -name go.mod -type f -not -path './.git/*' -print | sort | \
+	while IFS= read -r module; do \
+		directory="$$(dirname "$$module")"; \
+		printf 'check: %s\n' "$$directory"; \
+		(cd "$$directory" && go build -mod=readonly -o /dev/null ./...); \
+	done
 
 lint:
 	@if ! command -v golangci-lint &> /dev/null; then \
@@ -14,6 +23,7 @@ lint:
 
 help:
 	@printf '%s\n' \
+		'make check                  Build all modules with readonly dependencies' \
 		'make test                   Run all tests' \
 		'make lint                   Run golangci-lint (auto-install if missing)' \
 		'make tidy                   Run go mod tidy for all modules' \

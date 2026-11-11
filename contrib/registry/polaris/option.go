@@ -21,21 +21,21 @@ type options struct {
 	// 是否健康，默认 true
 	Healthy bool
 
-	// 是否启用心跳，polaris 本身不提供，默认 true
+	// 是否启用 SDK 托管心跳，默认 true
 	Heartbeat bool
 
 	// 是否隔离，默认 false
 	Isolate bool
 
-	// TTL 超时，节点使用心跳上报时必填，未设置会返回 ErrorCode-400141
-	TTL int
+	// 心跳 TTL，单位秒，未设置时使用 SDK 默认值 5；禁用心跳时忽略
+	TTL *int
 
 	// 单次查询超时，可选，默认使用全局配置
 	// 总超时约为 (1+RetryCount) * Timeout
-	Timeout time.Duration
+	Timeout *time.Duration
 
 	// 重试次数，可选，默认使用全局配置
-	RetryCount int
+	RetryCount *int
 }
 
 // Option 是 polaris 配置项
@@ -73,17 +73,17 @@ func WithIsolate(isolate bool) Option {
 
 // WithTTL 设置 TTL
 func WithTTL(TTL int) Option {
-	return func(o *options) { o.TTL = TTL }
+	return func(o *options) { o.TTL = &TTL }
 }
 
 // WithTimeout 设置超时时间
 func WithTimeout(timeout time.Duration) Option {
-	return func(o *options) { o.Timeout = timeout }
+	return func(o *options) { o.Timeout = &timeout }
 }
 
 // WithRetryCount 设置重试次数
 func WithRetryCount(retryCount int) Option {
-	return func(o *options) { o.RetryCount = retryCount }
+	return func(o *options) { o.RetryCount = &retryCount }
 }
 
 // WithHeartbeat 设置是否启用心跳

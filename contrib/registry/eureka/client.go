@@ -457,6 +457,9 @@ func (e *Client) do(ctx context.Context, method string, params []string, input i
 			return err
 		}
 		retry, err := e.request(ctx, servers[i%len(servers)], method, params, bytes.NewReader(body), output)
+		if err == nil {
+			return nil
+		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

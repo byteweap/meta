@@ -6,7 +6,8 @@ import "context"
 type Registry interface {
 	// ID 返回实现标识符
 	ID() string
-	// Register 注册服务
+	// Register 注册服务；失败时由实现回滚已确认取得的资源，并汇总注册与回滚错误。
+	// 调用方仅在成功后调用 Deregister，不对失败注册执行整服务注销。
 	Register(ctx context.Context, service *ServiceInstance) error
 	// Deregister 注销服务
 	Deregister(ctx context.Context, service *ServiceInstance) error

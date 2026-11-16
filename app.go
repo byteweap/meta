@@ -85,7 +85,7 @@ func (a *App) Run() (err error) {
 		ctx = signalCtx
 	}
 	results := make(chan error, len(a.opts.servers))
-	started, registrationAttempted := 0, false
+	started, registered := 0, false
 	defer func() {
 		if err == context.Canceled && ctx.Err() != nil {
 			err = nil
@@ -93,7 +93,7 @@ func (a *App) Run() (err error) {
 		a.cancel()
 		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.opts.stopTimeout)
 		defer cancel()
-		err = errors.Join(err, a.cleanup(stopCtx, registrationAttempted, results, started))
+		err = errors.Join(err, a.cleanup(stopCtx, registered, results, started))
 	}()
 
 	if ctx.Err() != nil {
@@ -140,10 +140,10 @@ func (a *App) Run() (err error) {
 	if ctx.Err() != nil {
 		return nil
 	}
-	registrationAttempted = a.opts.registry != nil
 	if err := a.register(ctx); err != nil {
 		return err
 	}
+	registered = a.opts.registry != nil
 	for _, fn := range a.opts.postStartHooks {
 		if ctx.Err() != nil {
 			return nil
@@ -162,12 +162,12 @@ func (a *App) Stop() error {
 	return nil
 }
 
-func (a *App) cleanup(ctx context.Context, registrationAttempted bool, results <-chan error, started int) error {
+func (a *App) cleanup(ctx context.Context, registered bool, results <-chan error, started int) error {
 	var err error
 	for _, fn := range a.opts.preStopHooks {
 		err = errors.Join(err, fn(ctx))
 	}
-	if registrationAttempted {
+	if registered {
 		err = errors.Join(err, a.deregister(ctx))
 	}
 	// Endpoint 也可能分配资源，尚未 Start 的服务同样需要停止。

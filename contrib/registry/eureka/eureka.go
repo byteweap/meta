@@ -2,6 +2,7 @@ package eureka
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"strings"
 	"sync"
@@ -90,8 +91,14 @@ func (e *API) broadcast() {
 }
 
 func (e *API) Register(ctx context.Context, endpoints ...Endpoint) error {
-	for _, ep := range endpoints {
+	for i, ep := range endpoints {
 		if err := e.cli.Register(ctx, ep); err != nil {
+			for _, registered := range endpoints[:i] {
+				// 每项独立限时，取消或某项清理失败不跳过其余已注册端点。
+				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), httpTimeout)
+				err = errors.Join(err, e.cli.Deregister(cleanupCtx, registered.AppID, registered.InstanceID))
+				cancel()
+			}
 			return err
 		}
 	}

@@ -53,14 +53,18 @@ func (r *Registry) ID() string {
 	return "nacos"
 }
 
-// Register 注册服务
-func (r *Registry) Register(_ context.Context, si *registry.ServiceInstance) error {
+// Register 注册服务；失败时回滚本次已确认注册成功的端点。
+func (r *Registry) Register(ctx context.Context, si *registry.ServiceInstance) (err error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if si.Name == "" {
 		return ErrServiceInstanceNameEmpty
 	}
 	if si.ID == "" {
 		return ErrServiceInstanceIDEmpty
 	}
+	requests := make([]vo.RegisterInstanceParam, 0, len(si.Endpoints))
 	for _, endpoint := range si.Endpoints {
 		u, err := url.Parse(endpoint)
 		if err != nil {
@@ -88,7 +92,7 @@ func (r *Registry) Register(_ context.Context, si *registry.ServiceInstance) err
 				weight = r.opts.weight
 			}
 		}
-		_, e := r.cli.RegisterInstance(vo.RegisterInstanceParam{
+		requests = append(requests, vo.RegisterInstanceParam{
 			Ip:          host,
 			Port:        uint64(p),
 			ServiceName: si.Name,
@@ -100,9 +104,31 @@ func (r *Registry) Register(_ context.Context, si *registry.ServiceInstance) err
 			ClusterName: r.opts.cluster,
 			GroupName:   r.opts.group,
 		})
-		if e != nil {
-			return fmt.Errorf("RegisterInstance err %v,%v", e, endpoint)
+	}
+	registered := 0
+	defer func() {
+		if err == nil {
+			return
 		}
+		// SDK 不接收 context；回滚仍受 SDK 自身超时限制。
+		for _, request := range requests[:registered] {
+			_, cleanupErr := r.cli.DeregisterInstance(vo.DeregisterInstanceParam{
+				Ip: request.Ip, Port: request.Port, ServiceName: request.ServiceName,
+				GroupName: request.GroupName, Cluster: request.ClusterName, Ephemeral: request.Ephemeral,
+			})
+			if cleanupErr != nil {
+				err = errors.Join(err, fmt.Errorf("meta/nacos: rollback %s:%d: %w", request.Ip, request.Port, cleanupErr))
+			}
+		}
+	}()
+	for i, request := range requests {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, err := r.cli.RegisterInstance(request); err != nil {
+			return fmt.Errorf("meta/nacos: register %s: %w", si.Endpoints[i], err)
+		}
+		registered++
 	}
 	return nil
 }

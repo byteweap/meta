@@ -3,10 +3,34 @@
 ## 当前状态
 
 - 需求见 [应用就绪与失败清理](requirements.md)，关键流程见 [决策记录](decision.md)。
-- 第 4 步已提交为 `9f11c11`，实施、本地验证和独立审查均已完成。第 5 步已获确认，进度见 [消息 panic 恢复](../message-panic-recovery/progress.md)。
+- 第 4 步已提交为 `9f11c11`；16 步复审发现与 Polaris 回滚冲突。补充修复、本地验证与独立复审已完成，用户已确认提交。
 - 追溯级别为 Level 2，并记录生命周期接口选择。
 - 基线提交为 `0d0a8a1`。
-- 最后更新为 2026-11-11。
+- 最后更新为 2026-11-16。
+
+## 复审修复：注册失败清理归属
+
+- 发现：App 在注册失败后注销整个实例，会删除 Polaris 已明确保留的预存端点。
+- 方案：App 仅清理成功注册；失败回滚由适配器负责。同步补齐 Nacos/Eureka 部分成功回滚及 etcd 已确认租约清理，保留全部错误。公共方法签名不变。
+- 实现：[App](../../app.go) 以注册成功标记控制注销；[接口约定](../../component/registry/registry.go) 与 README 同步。Nacos 先解析全部端点，失败回滚成功前缀；Eureka 逐项独立限时回滚并停止心跳，已成功响应不因随后取消改报失败；etcd 写入失败撤销本次 lease ID 并在启动注册失败时关闭 lease 客户端。
+- 验收证据见下表。原发现通过真实 App + Polaris 适配器复现：旧实现删除记录为 `[9001 9000 9001 9002]`；修复后只删除新建 `9001`，预存 `9000` 保留。
+- 审查状态：独立代理已只读复审完整修复，覆盖 App、Nacos/Eureka/etcd 回滚、取消、错误保留及新增测试，未发现新增可行动问题；原 Polaris 误注销发现已修复。以下 2026-11-11 结果属于原第 4 步历史证据。
+
+| 验收项 / 检查 | 本次证据 |
+|---|---|
+| AC-08 | [Polaris App 回归](../../contrib/registry/polaris/app_lifecycle_test.go) 6 个场景验证失败/取消与回滚错误、正常退出及 PostStart 失败；[App 测试](../../app_test.go) 验证成功响应紧邻取消仍注销，失败不注销而服务仍停止 |
+| AC-09 | [Nacos 回归](../../contrib/registry/nacos/registration_rollback_test.go) 验证预解析、成功前缀回滚、全部错误保留及取消边界；[Eureka 回归](../../contrib/registry/eureka/registration_rollback_test.go) 验证部分失败、取消、清理错误/超时后继续、心跳回收与成功响应；[etcd 回归](../../contrib/registry/etcd/registration_rollback_test.go) 验证 Grant 失败无副作用、Put 失败仅撤销已知租约、独立清理 context、错误聚合和成功响应 |
+| 根 App race | `go test -mod=readonly -race -count=1 .` 通过（1.561s） |
+| Polaris 普通 / race | 模块内 `go test -mod=readonly ./...` 与 `go test -mod=readonly -race ./...` 通过（0.596s / 1.673s） |
+| Eureka 普通 / race | 模块内相同命令通过（0.765s / 1.702s），修复前新增两组回归失败 |
+| Nacos 普通 / race | 模块内相同命令通过（0.495s / 1.913s） |
+| etcd 专项 race | `go test -mod=readonly -race -run '^TestRegisterWithKVRollsBackOnlyGrantedLease$' -count=1 ./...` 通过（1.850s） |
+| 21 模块构建 | `make check` 通过，退出 0；模块 stat 缓存仍有权限提示，不影响构建，依赖文件未改动 |
+| 文档与差异核对 | 12 个变更 Go 文件格式检查、41 个本地文档链接及 `git diff --check` 均通过 |
+
+本次命令使用 `GOCACHE=/tmp/meta-review-module-cache GOPROXY=off`。测试均使用组件替身和可控 HTTP transport，不连接真实注册中心。etcd 原有全量测试需要运行中的 etcd，本次仅运行新增回归；未运行真实服务联调或线上验证。SDK 超时后的远端结果仍可能不确定，回滚失败保留错误供调用方处理；Nacos/Eureka 无 Existed 标记，无法区分同地址预存实例，本次保证仅回滚本次成功返回的端点。范围扩展仅为同步失败清理职责所必需的三种适配器调整，未更改公共方法签名、依赖或增加兼容分支。
+
+2026-11-16 用户确认提交本次修复。本记录随实现与回归测试一并提交，提交说明为 `fix: scope service deregistration to successful registrations`。
 
 ## 实施记录
 

@@ -2,6 +2,7 @@ package etcd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"time"
@@ -65,7 +66,7 @@ func (r *Registry) Register(ctx context.Context, service *registry.ServiceInstan
 	r.lease = clientv3.NewLease(r.client)
 	leaseID, err := r.registerWithKV(ctx, key, value)
 	if err != nil {
-		return err
+		return errors.Join(err, r.lease.Close())
 	}
 
 	hctx, cancel := context.WithCancel(r.opts.ctx)
@@ -135,9 +136,13 @@ func (r *Registry) registerWithKV(ctx context.Context, key string, value string)
 	if err != nil {
 		return 0, err
 	}
-	_, err = r.client.Put(ctx, key, value, clientv3.WithLease(grant.ID))
+	_, err = r.kv.Put(ctx, key, value, clientv3.WithLease(grant.ID))
 	if err != nil {
-		return 0, err
+		// 按本次租约回滚，避免删除可能已被其他实例接管的 key。
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cancel()
+		_, cleanupErr := r.lease.Revoke(cleanupCtx, grant.ID)
+		return 0, errors.Join(err, cleanupErr)
 	}
 	return grant.ID, nil
 }

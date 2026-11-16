@@ -196,9 +196,38 @@ func TestAppCleansUpEveryStartupFailure(t *testing.T) {
 			require.Equal(t, int32(1), postStops.Load())
 			if stage == "register" || stage == "post-start" {
 				require.Equal(t, int32(1), reg.registerCalls.Load())
-				require.Equal(t, int32(1), reg.deregisterCalls.Load())
 			} else {
 				require.Zero(t, reg.registerCalls.Load())
+			}
+			if stage == "post-start" {
+				require.Equal(t, int32(1), reg.deregisterCalls.Load())
+			} else {
+				require.Zero(t, reg.deregisterCalls.Load())
+			}
+		})
+	}
+}
+
+func TestAppRegistrationResultDeterminesCleanupAfterCancellation(t *testing.T) {
+	for _, succeeded := range []bool{false, true} {
+		t.Run(map[bool]string{false: "failed", true: "succeeded"}[succeeded], func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			reg := &lifecycleRegistry{register: func(context.Context) error {
+				cancel()
+				if !succeeded {
+					return context.Canceled
+				}
+				return nil
+			}}
+			srv := newLifecycleServer()
+			app := New(Context(ctx), Server(srv), Registry(reg), Signal())
+			require.NoError(t, awaitLifecycle(t, runLifecycleApp(t, app)))
+			require.Equal(t, int32(1), reg.registerCalls.Load())
+			require.Equal(t, int32(1), srv.stopCalls.Load())
+			if succeeded {
+				require.Equal(t, int32(1), reg.deregisterCalls.Load())
+			} else {
 				require.Zero(t, reg.deregisterCalls.Load())
 			}
 		})

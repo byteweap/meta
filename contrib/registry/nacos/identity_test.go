@@ -21,6 +21,9 @@ import (
 type identityClient struct {
 	naming_client.INamingClient
 	registered     []vo.RegisterInstanceParam
+	deregistered   []vo.DeregisterInstanceParam
+	register       func(vo.RegisterInstanceParam) (bool, error)
+	deregister     func(vo.DeregisterInstanceParam) (bool, error)
 	instances      []model.Instance
 	queries        []vo.SelectAllInstancesParam
 	subscription   *vo.SubscribeParam
@@ -32,6 +35,17 @@ type identityClient struct {
 
 func (c *identityClient) RegisterInstance(param vo.RegisterInstanceParam) (bool, error) {
 	c.registered = append(c.registered, param)
+	if c.register != nil {
+		return c.register(param)
+	}
+	return true, nil
+}
+
+func (c *identityClient) DeregisterInstance(param vo.DeregisterInstanceParam) (bool, error) {
+	c.deregistered = append(c.deregistered, param)
+	if c.deregister != nil {
+		return c.deregister(param)
+	}
 	return true, nil
 }
 

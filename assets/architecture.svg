@@ -38,7 +38,7 @@
   <path d="M150,159 L150,141" fill="none" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
   <path d="M320,137 L320,153" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
   <path d="M330,159 L330,141" fill="none" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
-  <text x="237" y="152" font-size="10" fill="#64748b" text-anchor="middle">IMessage / OMessage</text>
+  <text x="237" y="152" font-size="10" fill="#64748b" text-anchor="middle">ClientEnvelope / ServerEnvelope</text>
 
   <!-- 网关 ⇄ 总线 -->
   <path d="M140,301 L140,325" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>

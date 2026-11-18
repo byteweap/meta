@@ -12,8 +12,8 @@ message Header {
   int64 timestamp = 4;
 }
 
-// 上行消息（客户端 → Gate → Mesh）
-message IMessage {
+// ClientEnvelope 封装客户端发往 Mesh 的上行消息，由 Gate 转发
+message ClientEnvelope {
   Header header = 1;  // 必填
   string service = 2; // 目标业务服务名，不能为空
   // 业务 Protobuf 消息，类型由 (service, cmd, version) 对应的上行路由约定
@@ -21,8 +21,8 @@ message IMessage {
   bytes payload = 3;
 }
 
-// 下行消息（Mesh → Gate → 客户端）
-message OMessage {
+// ServerEnvelope 封装 Mesh 发往客户端的响应或主动推送，由 Gate 转发
+message ServerEnvelope {
   Header header = 1;    // 必填。RESPONSE 回填原请求的 seq、cmd、version
   string service = 2;   // 来源业务服务名
   MsgType msg_type = 3; // RESPONSE 或 PUSH

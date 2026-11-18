@@ -82,7 +82,7 @@ func TestMeshSessionEventsRequireCurrentOwnership(t *testing.T) {
 						calls = append(calls, cluster.EventOffline)
 					})
 					businessCalls := 0
-					m.Route(1, 1, func(*Mesh, *broker.Message, *envelope.IMessage) { businessCalls++ })
+					m.Route(1, 1, func(*Mesh, *broker.Message, *envelope.ClientEnvelope) { businessCalls++ })
 					header := sessionEventHeader(42, event, "current")
 					if tc.editHeader != nil {
 						tc.editHeader(header)

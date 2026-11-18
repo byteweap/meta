@@ -89,7 +89,7 @@ func TestMeshPanicBusinessAndEventsContinue(t *testing.T) {
 					panic("business handler failed")
 				}
 			}
-			m.Route(1, 1, func(_ *Mesh, msg *broker.Message, _ *envelope.IMessage) {
+			m.Route(1, 1, func(_ *Mesh, msg *broker.Message, _ *envelope.ClientEnvelope) {
 				handler(cluster.GetUIDBy(msg.Header))
 			})
 			m.OnlineHandler(handler)
@@ -134,7 +134,7 @@ func TestMeshPanicRPCContinuesWithoutDuplicateReply(t *testing.T) {
 				return []byte("next"), "ok", http.StatusOK
 			})
 			processed := make(chan struct{})
-			m.Route(99, 1, func(*Mesh, *broker.Message, *envelope.IMessage) { close(processed) })
+			m.Route(99, 1, func(*Mesh, *broker.Message, *envelope.ClientEnvelope) { close(processed) })
 			barrier := mustBusinessMessage(t, 99, 1, "game", &envelope.Header{})
 			runPanicMesh(t, m)
 			bro.handler(&broker.Message{Reply: "failed.reply", Header: broker.Header{"cmd": {"first"}, "version": {"v1"}}})

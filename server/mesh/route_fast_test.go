@@ -31,7 +31,7 @@ func TestRouteFastWithWrap(t *testing.T) {
 func TestBusinessEnvelopeRequiresHeader(t *testing.T) {
 	m := New()
 	calls := 0
-	m.Route(0, 0, func(*Mesh, *broker.Message, *envelope.IMessage) { calls++ })
+	m.Route(0, 0, func(*Mesh, *broker.Message, *envelope.ClientEnvelope) { calls++ })
 
 	msg := &broker.Message{}
 	m.handlerPubSubMessage(msg) // 空 protobuf 消息可以解码，但不包含 header
@@ -41,7 +41,7 @@ func TestBusinessEnvelopeRequiresHeader(t *testing.T) {
 
 	// 显式提供空 header 时，零值路由仍可正常使用
 	var err error
-	msg.Data, err = proto.Marshal(&envelope.IMessage{Header: &envelope.Header{}})
+	msg.Data, err = proto.Marshal(&envelope.ClientEnvelope{Header: &envelope.Header{}})
 	if err != nil {
 		t.Fatalf("marshal envelope: %v", err)
 	}
@@ -57,14 +57,14 @@ func TestRequestRouteFastWithWrapRequest(t *testing.T) {
 
 	called := false
 	wantData := []byte("mesh-ok")
-	m.RPCRoute("findUser", "v1", WrapRPC(func(_ *RPCContext, req *envelope.IMessage) ([]byte, string, int) {
+	m.RPCRoute("findUser", "v1", WrapRPC(func(_ *RPCContext, req *envelope.ClientEnvelope) ([]byte, string, int) {
 		if req != nil && req.GetService() == "mesh" {
 			called = true
 		}
 		return wantData, "ok", 200
 	}))
 
-	raw, err := proto.Marshal(&envelope.IMessage{
+	raw, err := proto.Marshal(&envelope.ClientEnvelope{
 		Service: "mesh",
 	})
 	if err != nil {

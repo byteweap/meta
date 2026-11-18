@@ -10,12 +10,12 @@ import (
 	"github.com/byteweap/meta/envelope"
 )
 
-type MessageHandler func(*Mesh, *broker.Message, *envelope.IMessage)
+type MessageHandler func(*Mesh, *broker.Message, *envelope.ClientEnvelope)
 
 // Wrap 将业务函数包装成网关消息的路由处理器
 // payload 非空时解码为 *T，省略或长度为 0 时向 handler 传入 nil
 func Wrap[T any](handler func(*Context, *T)) MessageHandler {
-	return func(m *Mesh, msg *broker.Message, e *envelope.IMessage) {
+	return func(m *Mesh, msg *broker.Message, e *envelope.ClientEnvelope) {
 		ctx := newContext(m, msg, e)
 		defer ctx.release()
 
@@ -63,7 +63,7 @@ func adaptMessageHandler(handler any) (MessageHandler, error) {
 	if argType.Kind() != reflect.Pointer {
 		return nil, fmt.Errorf("mesh: handler second arg must be pointer type, got %s", argType.String())
 	}
-	return func(m *Mesh, msg *broker.Message, e *envelope.IMessage) {
+	return func(m *Mesh, msg *broker.Message, e *envelope.ClientEnvelope) {
 		ctx := newContext(m, msg, e)
 		defer ctx.release()
 

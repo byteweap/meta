@@ -210,7 +210,7 @@ func TestDiscoveryRecoveryWaitsForLateInitialSnapshot(t *testing.T) {
 	require.Nil(t, got.selector)
 	require.ErrorIs(t, got.err, context.Canceled)
 	require.ErrorIs(t, awaitBackground(t, stopped), w.stopError)
-	require.Nil(t, g.cachedDiscovery("game"), "late initialization must not reinsert a stopped discovery")
+	require.Nil(t, g.resolver().Cached("game"), "late initialization must not reinsert a stopped discovery")
 	require.Equal(t, int32(1), w.stopCalls.Load())
 	select {
 	case <-w.nextEntered:
@@ -261,7 +261,7 @@ func TestDiscoveryRecoverySharesCloseWithStop(t *testing.T) {
 			require.ErrorIs(t, g.Stop(context.Background()), w.stopError)
 			require.Equal(t, int32(1), w.stopCalls.Load())
 			require.Empty(t, sel.Nodes())
-			require.Nil(t, g.cachedDiscovery("game"))
+			require.Nil(t, g.resolver().Cached("game"))
 		})
 	}
 }

@@ -10,13 +10,13 @@ import (
 	"sync"
 
 	"github.com/olahol/melody"
-	"golang.org/x/sync/singleflight"
 
 	"github.com/byteweap/meta"
 	"github.com/byteweap/meta/component/broker"
 	"github.com/byteweap/meta/component/log"
 	es "github.com/byteweap/meta/errors"
 	"github.com/byteweap/meta/internal/cluster"
+	"github.com/byteweap/meta/internal/discovery"
 	"github.com/byteweap/meta/pkg/endpoint"
 	"github.com/byteweap/meta/pkg/host"
 	"github.com/byteweap/meta/server"
@@ -45,9 +45,7 @@ type Gate struct {
 	stopCtx     context.Context
 	stopErr     error
 
-	mu       sync.RWMutex
-	services map[string]*serviceDiscovery // 服务名到已初始化的发现任务
-	sfg      singleflight.Group
+	resolver func() *discovery.Resolver
 }
 
 var _ server.Server = (*Gate)(nil)
@@ -59,16 +57,21 @@ func New(opts ...Option) *Gate {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Gate{
+	g := &Gate{
 		ctx:      ctx,
 		cancel:   cancel,
 		opts:     o,
 		Server:   &http.Server{},
 		sessions: newSessions(),
-		services: make(map[string]*serviceDiscovery),
 		ready:    make(chan struct{}),
 		stopDone: make(chan struct{}),
 	}
+	g.resolver = sync.OnceValue(func() *discovery.Resolver {
+		return discovery.New(g.ctx, o.discovery, o.selectorFunc, func(service, id string) string {
+			return cluster.Subject(o.prefix, g.appName, service, id)
+		})
+	})
+	return g
 }
 
 func (g *Gate) Kind() server.Kind {

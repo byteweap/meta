@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/byteweap/meta/envelope"
 	es "github.com/byteweap/meta/errors"
 	"github.com/byteweap/meta/internal/cluster"
+	"github.com/byteweap/meta/internal/discovery"
 	"github.com/byteweap/meta/pkg/async"
 	"github.com/byteweap/meta/pkg/conv"
 	"github.com/byteweap/meta/server"
@@ -31,6 +33,7 @@ type Mesh struct {
 	ready   chan struct{}
 
 	opts          *options
+	resolver      *discovery.Resolver
 	routes        sync.Map // key: cmd<<32|version (uint64), value: MessageHandler
 	requestRoutes sync.Map // key: cmd.version (string), value: RPCMessageHandler
 
@@ -41,9 +44,10 @@ type Mesh struct {
 	offlineHandler   func(uid int64) // 玩家掉线
 	reconnectHandler func(uid int64) // 玩家重连
 
-	cancel context.CancelFunc
-	done   chan struct{}
-	mu     sync.Mutex
+	cancel  context.CancelFunc
+	done    chan struct{}
+	mu      sync.Mutex
+	stopErr error
 }
 
 const meshScheme = "mesh"
@@ -68,7 +72,7 @@ func (*Mesh) Kind() server.Kind {
 // Ready 返回本次启动的就绪信号。
 func (m *Mesh) Ready() <-chan struct{} { return m.ready }
 
-// Start 启动 Mesh 服务
+// Start 启动 Mesh 服务。前缀、服务名和实例 ID 含 Broker 通配符时返回错误
 func (m *Mesh) Start(ctx context.Context) error {
 	app, ok := meta.FromContext(ctx)
 	if !ok {
@@ -94,13 +98,27 @@ func (m *Mesh) Start(ctx context.Context) error {
 		m.mu.Unlock()
 		return err
 	}
+	name, id := app.Name(), app.ID()
+	// 入站订阅只允许框架在发送方字段放置通配符，否则定点请求也可能被其他实例处理
+	if strings.ContainsAny(m.opts.prefix, "*>") || strings.ContainsAny(name, "*>") || strings.ContainsAny(id, "*>") {
+		m.mu.Unlock()
+		return fmt.Errorf("wildcard in mesh address: prefix=%q service=%q id=%q", m.opts.prefix, name, id)
+	}
 	runCtx, cancel := context.WithCancel(ctx)
 	// 在启动前发出的 RPC 也随本次运行结束而取消
 	context.AfterFunc(runCtx, m.cancel)
 	m.ctx = runCtx
 	m.cancel = cancel
-	m.appID = app.ID()
-	m.appName = app.Name()
+	m.appID = id
+	m.appName = name
+	if m.opts.discovery != nil && m.opts.selectorFunc != nil {
+		m.resolver = discovery.New(runCtx, m.opts.discovery, m.opts.selectorFunc, func(service, id string) string {
+			if !validSubjectToken(id) {
+				return ""
+			}
+			return cluster.Subject(m.opts.prefix, m.appName, service, id)
+		})
+	}
 	m.done = make(chan struct{})
 	m.started = true
 	m.mu.Unlock()
@@ -110,7 +128,12 @@ func (m *Mesh) Start(ctx context.Context) error {
 			m.cancelReply()
 		}
 		cancel()
+		var closeErr error
+		if m.resolver != nil {
+			closeErr = m.resolver.Close()
+		}
 		m.mu.Lock()
+		m.stopErr = closeErr
 		if m.done != nil {
 			close(m.done)
 			m.done = nil
@@ -123,22 +146,27 @@ func (m *Mesh) Start(ctx context.Context) error {
 	return m.loop()
 }
 
-// Stop 停止 Mesh 服务
+// Stop 停止 Mesh 服务，在 ctx 的期限内等待清理，并返回服务发现监听器的关闭错误
 func (m *Mesh) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	m.stopped = true
 	cancel := m.cancel
 	done := m.done
+	closeErr := m.stopErr
 	m.mu.Unlock()
 
 	if cancel != nil {
 		cancel()
 	}
 	if done == nil {
-		return nil
+		return closeErr
 	}
 	select {
 	case <-done:
+		// 关闭 done 前已经写入最终结果，Mesh 实例只启动一次
+		if m.stopErr != nil {
+			return m.stopErr
+		}
 		log.Infof("%s.%s server stop success", m.appName, m.appID)
 		return nil
 	case <-ctx.Done():
@@ -335,6 +363,9 @@ func (m *Mesh) Request(ctx context.Context, subject, cmd, version string, data [
 	}
 	header := broker.Header{"cmd": {cmd}, "version": {version}}
 	if deadline, ok := ctx.Deadline(); ok {
+		if time.Until(deadline) <= 0 {
+			return nil, "", 0, context.DeadlineExceeded
+		}
 		header.Set(rpcDeadlineHeader, strconv.FormatInt(deadline.UnixMilli(), 10))
 	}
 	result, err := m.opts.broker.Request(ctx, subject, data, broker.RequestHeader(header))

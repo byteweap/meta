@@ -104,15 +104,18 @@ func (g *Gate) dispatch(uid int64, sessionID, toService string, data []byte) err
 		return fmt.Errorf("locate node: %w", err)
 	}
 
+	var subject string
 	if nodeID == "" {
-		node, selectErr := d.Select(conv.String(uid))
-		if selectErr != nil {
-			return fmt.Errorf("select node: %w", selectErr)
+		subject, err = d.SelectSubject(conv.String(uid))
+		if err != nil {
+			return fmt.Errorf("select node: %w", err)
 		}
-		nodeID = node.ID()
-	} else if !d.hasNode(nodeID) {
-		// 有状态业务不能在绑定失效时改投其他实例
-		return fmt.Errorf("bound node %q: %w", nodeID, selector.ErrNoAvailableNode)
+	} else {
+		subject = d.Subject(nodeID)
+		if subject == "" {
+			// 有状态业务不能在绑定失效时改投其他实例
+			return fmt.Errorf("bound node %q: %w", nodeID, selector.ErrNoAvailableNode)
+		}
 	}
 	// 构建消息头
 	var (
@@ -121,7 +124,6 @@ func (g *Gate) dispatch(uid int64, sessionID, toService string, data []byte) err
 	)
 	header.Set(cluster.FieldNameSessionID, sessionID)
 	// 发布消息到 Mesh
-	subject := cluster.Subject(g.opts.prefix, g.appName, toService, nodeID)
 	if err := g.opts.broker.Pub(g.ctx, subject, data, broker.PubHeader(header)); err != nil {
 		return fmt.Errorf("publish to %s: %w", subject, err)
 	}

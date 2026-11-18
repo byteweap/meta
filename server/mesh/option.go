@@ -3,6 +3,8 @@ package mesh
 import (
 	"github.com/byteweap/meta/component/broker"
 	"github.com/byteweap/meta/component/locator"
+	"github.com/byteweap/meta/component/registry"
+	"github.com/byteweap/meta/component/selector"
 )
 
 const (
@@ -16,6 +18,8 @@ type options struct {
 	messageBufferSize int                    // 消息缓冲区大小
 	locator           locator.SessionLocator // 玩家位置与会话定位器
 	broker            broker.Broker          // 消息传输代理
+	discovery         registry.Registry
+	selectorFunc      func() selector.Selector
 }
 
 // Option 定义 Mesh 可选配置函数
@@ -61,6 +65,24 @@ func Broker(broker broker.Broker) Option {
 	return func(o *options) {
 		if broker != nil {
 			o.broker = broker
+		}
+	}
+}
+
+// Discovery 设置 RequestService 使用的注册中心
+func Discovery(reg registry.Registry) Option {
+	return func(o *options) {
+		if reg != nil {
+			o.discovery = reg
+		}
+	}
+}
+
+// SelectorFunc 为每个目标服务创建独立的选择器，RequestService 以空 key 选点
+func SelectorFunc(newSelector func() selector.Selector) Option {
+	return func(o *options) {
+		if newSelector != nil {
+			o.selectorFunc = newSelector
 		}
 	}
 }

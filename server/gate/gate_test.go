@@ -295,12 +295,12 @@ func TestEnsureRetriesAfterWatchFailure(t *testing.T) {
 
 	_, err := g.ensure("match")
 	require.EqualError(t, err, "watch failed")
-	require.Nil(t, g.cachedDiscovery("match"))
+	require.Nil(t, g.resolver().Cached("match"))
 
 	sel, err := g.ensure("match")
 	require.NoError(t, err)
 	require.NotNil(t, sel)
-	require.NotNil(t, g.cachedDiscovery("match"))
+	require.NotNil(t, g.resolver().Cached("match"))
 	require.Equal(t, 2, discovery.watchCalls)
 }
 
@@ -332,7 +332,7 @@ func TestEnsureSingleflightDeduplicatesConcurrentWatch(t *testing.T) {
 		require.NoError(t, err)
 	}
 	require.Equal(t, 1, discovery.watchCalls)
-	require.NotNil(t, g.cachedDiscovery("match"))
+	require.NotNil(t, g.resolver().Cached("match"))
 }
 
 func TestHandleConnectRollsBackSessionWhenBindFails(t *testing.T) {

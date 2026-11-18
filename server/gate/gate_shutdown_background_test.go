@@ -168,7 +168,7 @@ func TestGateShutdownBackgroundClosesLateWatcher(t *testing.T) {
 	require.Equal(t, int32(1), watchCalls.Load())
 	require.Equal(t, int32(1), closeCalls.Load())
 	require.Zero(t, nextCalls.Load())
-	require.Nil(t, g.cachedDiscovery("game"))
+	require.Nil(t, g.resolver().Cached("game"))
 }
 
 func TestGateShutdownBackgroundStopsWatchersIndependently(t *testing.T) {
@@ -190,8 +190,7 @@ func TestGateShutdownBackgroundStopsWatchersIndependently(t *testing.T) {
 		},
 		stop: func() error {
 			callsA.Add(1)
-			g.mu.RLock() // Stop callbacks may access shared state; no global lock may be held.
-			g.mu.RUnlock()
+			_ = g.resolver().Cached("a") // 关闭回调也可以读取缓存
 			stopA <- struct{}{}
 			<-releaseStopA
 			return closeA
@@ -205,8 +204,7 @@ func TestGateShutdownBackgroundStopsWatchersIndependently(t *testing.T) {
 		},
 		stop: func() error {
 			callsB.Add(1)
-			g.mu.RLock()
-			g.mu.RUnlock()
+			_ = g.resolver().Cached("b")
 			unblockNextB()
 			stopB <- struct{}{}
 			return closeB

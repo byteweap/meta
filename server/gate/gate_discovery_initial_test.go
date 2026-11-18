@@ -179,8 +179,8 @@ func TestGateDispatchTracksServiceAvailability(t *testing.T) {
 
 	instances = []*registry.ServiceInstance{{Name: "match", ID: "match-2"}}
 	watcher.send(t, instances)
-	current := g.cachedDiscovery("match")
-	require.Eventually(t, func() bool { return current.hasNode("match-2") }, time.Second, time.Millisecond)
+	current := g.resolver().Cached("match")
+	require.Eventually(t, func() bool { return current.Subject("match-2") != "" }, time.Second, time.Millisecond)
 	bound = "match-1"
 	require.ErrorIs(t, dispatch(), selector.ErrNoAvailableNode)
 	bound = "match-2"
@@ -189,7 +189,7 @@ func TestGateDispatchTracksServiceAvailability(t *testing.T) {
 	instances = nil
 	watcher.send(t, instances)
 	awaitBackground(t, watcher.done)
-	require.Nil(t, g.cachedDiscovery("match"))
+	require.Nil(t, g.resolver().Cached("match"))
 	require.ErrorIs(t, dispatch(), errServiceNotFound)
 
 	instances = []*registry.ServiceInstance{{Name: "match", ID: "match-3"}}
@@ -212,7 +212,7 @@ func TestGateServiceDisappearsWhileSubscribing(t *testing.T) {
 	g := newInitialDiscoveryGate(t, reg, &testBroker{})
 	_, err := g.ensure("game")
 	require.ErrorIs(t, err, errServiceNotFound)
-	require.Nil(t, g.cachedDiscovery("game"))
+	require.Nil(t, g.resolver().Cached("game"))
 	require.EqualValues(t, 1, w.stops.Load())
 }
 

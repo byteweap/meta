@@ -222,6 +222,25 @@ data, tip, code, err := m.Request(ctx, subject, "hello", "v1", payload)
 
 传输和排队时间计入期限。出队时已过期的请求跳过业务，执行期间到期则通过 `ctx.Done()` 通知 handler。框架在 handler 返回后统一回复，已过期的结果按 504 处理。若截止时间头格式错误或有多个值，Mesh 回复 400。已处理请求的回包使用独立的发送期限，Mesh 停止或到期后仍会尝试发送一次。
 
+#### 按服务名发送
+
+当任一实例都能处理请求时，使用 `RequestService`。例如创建房间时，调用方只需知道目标服务名。下面使用 `contrib/selector/roundrobin` 提供的轮询选择器。
+
+```go
+m := mesh.New(
+    mesh.Broker(bro), mesh.Locator(loc),
+    mesh.Discovery(reg),
+    mesh.SelectorFunc(func() selector.Selector { return roundrobin.New() }),
+)
+
+// Mesh 就绪后，由业务传入本次请求的 ctx
+data, tip, code, err := m.RequestService(ctx, "room", "create", "v1", payload)
+```
+
+首次调用会按服务名建立监听，同名并发调用共享初始化。等待者可以独立取消。最后一个等待者退出时，尚未完成的查询也会收到取消信号。后续请求从本地快照选取一个实例并发送一次，截止时间覆盖发现、传输和业务执行。没有可用实例时可用 `errors.Is(err, selector.ErrNoAvailableNode)` 判断，传输失败直接返回调用方。
+
+源服务名、目标服务名和选中的实例 ID 各占一个 subject 段。Mesh 启动时会拒绝前缀、服务名和实例 ID 中的 `*` 或 `>`。加入已有房间等有状态操作，由业务确定归属实例并通过 `Request` 发往具体 subject。Mesh 的消息循环串行执行业务，同步嵌套 RPC 时应避免调用链回到正在等待的实例。
+
 ## 消息与集群协议
 
 框架把业务消息和集群路由信息分开：

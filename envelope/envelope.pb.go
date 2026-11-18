@@ -77,8 +77,8 @@ type Header struct {
 	Seq     uint64 `protobuf:"varint,1,opt,name=seq,proto3" json:"seq,omitempty"`
 	Cmd     uint32 `protobuf:"varint,2,opt,name=cmd,proto3" json:"cmd,omitempty"`         // 业务命令，与 version 共同标识服务内的路由
 	Version uint32 `protobuf:"varint,3,opt,name=version,proto3" json:"version,omitempty"` // cmd 对应的业务版本
-	// 发送方的 Unix 毫秒时间戳，0 表示未提供。客户端时钟不用于判断消息顺序
-	Timestamp     int64 `protobuf:"varint,4,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	// 发送方发送消息时的 Unix 毫秒时间戳，0 表示未提供。客户端时钟不用于判断消息顺序
+	SentAtUnixMs  int64 `protobuf:"varint,4,opt,name=sent_at_unix_ms,json=sentAtUnixMs,proto3" json:"sent_at_unix_ms,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -134,9 +134,9 @@ func (x *Header) GetVersion() uint32 {
 	return 0
 }
 
-func (x *Header) GetTimestamp() int64 {
+func (x *Header) GetSentAtUnixMs() int64 {
 	if x != nil {
-		return x.Timestamp
+		return x.SentAtUnixMs
 	}
 	return 0
 }
@@ -207,12 +207,12 @@ func (x *ClientEnvelope) GetPayload() []byte {
 // ServerEnvelope 封装 Mesh 发往客户端的响应或主动推送，由 Gate 转发
 type ServerEnvelope struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
-	Header  *Header                `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`                                         // 必填。RESPONSE 回填原请求的 seq、cmd、version
-	Service string                 `protobuf:"bytes,2,opt,name=service,proto3" json:"service,omitempty"`                                       // 来源业务服务名
-	MsgType MsgType                `protobuf:"varint,3,opt,name=msg_type,json=msgType,proto3,enum=envelope.MsgType" json:"msg_type,omitempty"` // RESPONSE 或 PUSH
+	Header  *Header                `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`                    // 必填。RESPONSE 回填原请求的 seq、cmd、version
+	Service string                 `protobuf:"bytes,2,opt,name=service,proto3" json:"service,omitempty"`                  // 来源业务服务名
+	Kind    MsgType                `protobuf:"varint,3,opt,name=kind,proto3,enum=envelope.MsgType" json:"kind,omitempty"` // RESPONSE 或 PUSH
 	// RESPONSE 省略时表示成功，失败时携带非零错误码。PUSH 必须省略
-	Result *Code `protobuf:"bytes,4,opt,name=result,proto3" json:"result,omitempty"`
-	// 业务 Protobuf 消息，类型由 (service, cmd, version, msg_type) 约定
+	Error *ResponseError `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	// 业务 Protobuf 消息，类型由 (service, cmd, version, kind) 约定
 	// 省略或长度为 0 表示无业务消息体
 	Payload       []byte `protobuf:"bytes,5,opt,name=payload,proto3" json:"payload,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -263,16 +263,16 @@ func (x *ServerEnvelope) GetService() string {
 	return ""
 }
 
-func (x *ServerEnvelope) GetMsgType() MsgType {
+func (x *ServerEnvelope) GetKind() MsgType {
 	if x != nil {
-		return x.MsgType
+		return x.Kind
 	}
 	return MsgType_UNKNOWN
 }
 
-func (x *ServerEnvelope) GetResult() *Code {
+func (x *ServerEnvelope) GetError() *ResponseError {
 	if x != nil {
-		return x.Result
+		return x.Error
 	}
 	return nil
 }
@@ -284,28 +284,29 @@ func (x *ServerEnvelope) GetPayload() []byte {
 	return nil
 }
 
-type Code struct {
+// ResponseError 携带失败响应的错误码和可选说明
+type ResponseError struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Code          int32                  `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"` // 非零错误码
-	Tip           string                 `protobuf:"bytes,2,opt,name=tip,proto3" json:"tip,omitempty"`    // 可选的错误提示
+	Code          int32                  `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"`      // 非零错误码
+	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"` // 可选的错误说明，空字符串表示未提供
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *Code) Reset() {
-	*x = Code{}
+func (x *ResponseError) Reset() {
+	*x = ResponseError{}
 	mi := &file_envelope_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Code) String() string {
+func (x *ResponseError) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Code) ProtoMessage() {}
+func (*ResponseError) ProtoMessage() {}
 
-func (x *Code) ProtoReflect() protoreflect.Message {
+func (x *ResponseError) ProtoReflect() protoreflect.Message {
 	mi := &file_envelope_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -317,21 +318,21 @@ func (x *Code) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Code.ProtoReflect.Descriptor instead.
-func (*Code) Descriptor() ([]byte, []int) {
+// Deprecated: Use ResponseError.ProtoReflect.Descriptor instead.
+func (*ResponseError) Descriptor() ([]byte, []int) {
 	return file_envelope_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *Code) GetCode() int32 {
+func (x *ResponseError) GetCode() int32 {
 	if x != nil {
 		return x.Code
 	}
 	return 0
 }
 
-func (x *Code) GetTip() string {
+func (x *ResponseError) GetMessage() string {
 	if x != nil {
-		return x.Tip
+		return x.Message
 	}
 	return ""
 }
@@ -340,25 +341,25 @@ var File_envelope_proto protoreflect.FileDescriptor
 
 const file_envelope_proto_rawDesc = "" +
 	"\n" +
-	"\x0eenvelope.proto\x12\benvelope\"d\n" +
+	"\x0eenvelope.proto\x12\benvelope\"m\n" +
 	"\x06Header\x12\x10\n" +
 	"\x03seq\x18\x01 \x01(\x04R\x03seq\x12\x10\n" +
 	"\x03cmd\x18\x02 \x01(\rR\x03cmd\x12\x18\n" +
-	"\aversion\x18\x03 \x01(\rR\aversion\x12\x1c\n" +
-	"\ttimestamp\x18\x04 \x01(\x03R\ttimestamp\"n\n" +
+	"\aversion\x18\x03 \x01(\rR\aversion\x12%\n" +
+	"\x0fsent_at_unix_ms\x18\x04 \x01(\x03R\fsentAtUnixMs\"n\n" +
 	"\x0eClientEnvelope\x12(\n" +
 	"\x06header\x18\x01 \x01(\v2\x10.envelope.HeaderR\x06header\x12\x18\n" +
 	"\aservice\x18\x02 \x01(\tR\aservice\x12\x18\n" +
 	"\apayload\x18\x03 \x01(\fR\apayload\"\xc4\x01\n" +
 	"\x0eServerEnvelope\x12(\n" +
 	"\x06header\x18\x01 \x01(\v2\x10.envelope.HeaderR\x06header\x12\x18\n" +
-	"\aservice\x18\x02 \x01(\tR\aservice\x12,\n" +
-	"\bmsg_type\x18\x03 \x01(\x0e2\x11.envelope.MsgTypeR\amsgType\x12&\n" +
-	"\x06result\x18\x04 \x01(\v2\x0e.envelope.CodeR\x06result\x12\x18\n" +
-	"\apayload\x18\x05 \x01(\fR\apayload\",\n" +
-	"\x04Code\x12\x12\n" +
-	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x10\n" +
-	"\x03tip\x18\x02 \x01(\tR\x03tip*.\n" +
+	"\aservice\x18\x02 \x01(\tR\aservice\x12%\n" +
+	"\x04kind\x18\x03 \x01(\x0e2\x11.envelope.MsgTypeR\x04kind\x12-\n" +
+	"\x05error\x18\x04 \x01(\v2\x17.envelope.ResponseErrorR\x05error\x12\x18\n" +
+	"\apayload\x18\x05 \x01(\fR\apayload\"=\n" +
+	"\rResponseError\x12\x12\n" +
+	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage*.\n" +
 	"\aMsgType\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\f\n" +
 	"\bRESPONSE\x10\x01\x12\b\n" +
@@ -383,13 +384,13 @@ var file_envelope_proto_goTypes = []any{
 	(*Header)(nil),         // 1: envelope.Header
 	(*ClientEnvelope)(nil), // 2: envelope.ClientEnvelope
 	(*ServerEnvelope)(nil), // 3: envelope.ServerEnvelope
-	(*Code)(nil),           // 4: envelope.Code
+	(*ResponseError)(nil),  // 4: envelope.ResponseError
 }
 var file_envelope_proto_depIdxs = []int32{
 	1, // 0: envelope.ClientEnvelope.header:type_name -> envelope.Header
 	1, // 1: envelope.ServerEnvelope.header:type_name -> envelope.Header
-	0, // 2: envelope.ServerEnvelope.msg_type:type_name -> envelope.MsgType
-	4, // 3: envelope.ServerEnvelope.result:type_name -> envelope.Code
+	0, // 2: envelope.ServerEnvelope.kind:type_name -> envelope.MsgType
+	4, // 3: envelope.ServerEnvelope.error:type_name -> envelope.ResponseError
 	4, // [4:4] is the sub-list for method output_type
 	4, // [4:4] is the sub-list for method input_type
 	4, // [4:4] is the sub-list for extension type_name

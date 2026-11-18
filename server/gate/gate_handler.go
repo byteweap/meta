@@ -110,8 +110,14 @@ func (g *Gate) handleBinaryMessage(s *melody.Session, msg []byte) {
 	}
 	uid := uids.(int64)
 
+	value, _ := s.Get(cluster.FieldNameSessionID)
+	sessionID, _ := value.(string)
+	if sessionID == "" {
+		log.Error("[websocket] business message is missing a session ID")
+		return
+	}
 	// 校验后直接发布 WebSocket 本次读取的字节
-	g.dispatch(uid, incoming.GetService(), msg)
+	g.dispatch(uid, sessionID, incoming.GetService(), msg)
 }
 
 // 错误时调用

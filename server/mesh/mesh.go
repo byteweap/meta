@@ -334,16 +334,13 @@ func (m *Mesh) Request(subject, cmd, version string, data []byte) ([]byte, strin
 	return result.Data, tip, conv.Int(code), nil
 }
 
-// sendMessage 发送消息
-func (m *Mesh) sendMessage(subject, toService string, bytes []byte, uids ...int64) error {
-	var err error
-	for _, uid := range uids {
-		header := cluster.BuildHeader(uid, cluster.EventBusiness, "", m.appName, toService)
-		if e := m.opts.broker.Pub(m.ctx, subject, bytes, broker.PubHeader(header)); e != nil {
-			err = errors.Join(err, e)
-		}
+func (m *Mesh) sendResponse(subject, toService string, data []byte, uid int64, sessionID string) error {
+	header := cluster.BuildHeader(uid, cluster.EventBusiness, "", m.appName, toService)
+	header.Set(cluster.FieldNameDelivery, cluster.DeliveryResponse)
+	if sessionID != "" {
+		header.Set(cluster.FieldNameSessionID, sessionID)
 	}
-	return err
+	return m.opts.broker.Pub(m.ctx, subject, data, broker.PubHeader(header))
 }
 
 // okReply 发送成功回复

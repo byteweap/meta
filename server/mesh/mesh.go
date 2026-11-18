@@ -431,7 +431,7 @@ func (m *Mesh) handlerPubSubMessage(msg *broker.Message) {
 	case cluster.EventReconnect:
 		m.handleSessionEvent(msg, m.reconnectHandler)
 	default:
-		e := &envelope.IMessage{}
+		e := &envelope.ClientEnvelope{}
 		if err := proto.Unmarshal(msg.Data, e); err != nil {
 			log.Errorf("mesh unmarshal Gate2MeshEnvelope error: %v", err)
 			return

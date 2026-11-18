@@ -51,7 +51,7 @@ func TestRouteAutoWrapEmptyPayloadPassNil(t *testing.T) {
 		gotReq = req
 	})
 
-	raw, err := proto.Marshal(&envelope.IMessage{
+	raw, err := proto.Marshal(&envelope.ClientEnvelope{
 		Header: &envelope.Header{
 			Cmd:     1002,
 			Version: 1,
@@ -73,12 +73,12 @@ func TestRouteCompatibleWithMessageHandler(t *testing.T) {
 	m := New()
 
 	called := false
-	m.RouteX(1003, 1, MessageHandler(func(_ *Mesh, _ *broker.Message, _ *envelope.IMessage) {
+	m.RouteX(1003, 1, MessageHandler(func(_ *Mesh, _ *broker.Message, _ *envelope.ClientEnvelope) {
 		called = true
 	}))
 
 	h := mustLoadRouteHandler(t, m, 1003, 1)
-	h(m, &broker.Message{}, &envelope.IMessage{})
+	h(m, &broker.Message{}, &envelope.ClientEnvelope{})
 	if !called {
 		t.Fatalf("message handler not called")
 	}
@@ -123,7 +123,7 @@ func mustBusinessMessage(t *testing.T, cmd, version uint32, service string, payl
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
 	}
-	raw, err := proto.Marshal(&envelope.IMessage{
+	raw, err := proto.Marshal(&envelope.ClientEnvelope{
 		Header: &envelope.Header{
 			Cmd:     cmd,
 			Version: version,
@@ -155,7 +155,7 @@ func mustLoadRouteHandler(t *testing.T, m *Mesh, cmd, version uint32) MessageHan
 func invokeRouteHandler(t *testing.T, h MessageHandler, m *Mesh, msg *broker.Message, raw []byte) {
 	t.Helper()
 
-	envy := &envelope.IMessage{}
+	envy := &envelope.ClientEnvelope{}
 	if err := proto.Unmarshal(raw, envy); err != nil {
 		t.Fatalf("unmarshal gate envelope: %v", err)
 	}

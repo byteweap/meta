@@ -14,3 +14,11 @@
 已复核代码差异与验证记录。验证使用本机回环连接及 Broker 替身。实际 NATS 部署环境和业务自行构造的推送由其集成验证覆盖。
 
 2026-11-18 复核未提交改动。临时目录重新生成的 Go 绑定与工作区文件逐字节一致，当前和基线的协议描述符仍一致。补齐 [Mesh 路由说明](../../README.md#业务路由) 与 [Wrap 注释](../../server/mesh/handler.go) 中空 payload 的约定。Gate、Mesh 定向回归和 21 个模块构建均通过。仓库内的 Gate 客户端示例尚未实现协议收发。
+
+## 2026-11-18 消息类型命名
+
+从已合入上阶段改动的 `dev` 创建 `refactor/envelope-names`。已同步 [IDL](../../idl/envelope/envelope.proto)、Go 绑定、Gate、Mesh、[README](../../README.md) 和架构图。按用户要求移除旧 Go 类型别名，项目只使用新类型名。
+
+命名变更通过了根模块测试。将旧 IDL 的两处类型名替换为新名后，生成的描述符与当前描述符逐字节一致。
+
+移除别名后，确认 Go 和 Proto 源码已无旧类型名。Mesh 测试、Gate 定向回归和 21 个模块的 `make check` 通过。

@@ -40,7 +40,7 @@ var ctxPool = sync.Pool{
 }
 
 // newContext 从对象池获取上下文并重置字段
-func newContext(mesh *Mesh, msg *broker.Message, e *envelope.IMessage) *Context {
+func newContext(mesh *Mesh, msg *broker.Message, e *envelope.ClientEnvelope) *Context {
 	c := ctxPool.Get().(*Context)
 	c.reset(mesh, msg, e)
 	return c
@@ -65,7 +65,7 @@ func (c *Context) release() {
 }
 
 // reset 按当前消息重置上下文字段
-func (c *Context) reset(mesh *Mesh, msg *broker.Message, e *envelope.IMessage) {
+func (c *Context) reset(mesh *Mesh, msg *broker.Message, e *envelope.ClientEnvelope) {
 	c.mesh = mesh
 
 	// broker
@@ -153,7 +153,7 @@ func (c *Context) Copy() *Context {
 
 // OkResp 返回成功响应
 func (c *Context) OkResp(args ...proto.Message) {
-	out := &envelope.OMessage{
+	out := &envelope.ServerEnvelope{
 		Header: &envelope.Header{
 			Seq:       c.Seq(),
 			Cmd:       c.Cmd(),
@@ -201,7 +201,7 @@ func (c *Context) ErrResp(code int, args ...string) {
 		tip = args[0]
 	}
 
-	out := &envelope.OMessage{
+	out := &envelope.ServerEnvelope{
 		Header: &envelope.Header{
 			Seq:       c.Seq(),
 			Cmd:       c.Cmd(),

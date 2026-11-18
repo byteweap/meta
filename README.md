@@ -108,17 +108,17 @@ WebSocket 握手前，Gate 调用显式配置的 `UserIDExtractor` 验证请求�
 
 Gate 和 Mesh 均要求 `locator.SessionLocator`。Redis 定位器的数据格式和状态事件直接更新，不提供历史兼容。跨网关以原子 Claim 的顺序确定归属；本步骤不提供跨网关强制踢线或可靠事件投递。事件校验与业务回调不构成跨系统事务；远端写入成功但响应丢失时，也无法保证失败请求未改变位置。
 
-客户端二进制消息会被解析为 `envelope.IMessage`：
+客户端二进制消息会被解析为 `envelope.ClientEnvelope`：
 
 ```proto
-message IMessage {
+message ClientEnvelope {
   Header header = 1;
   string service = 2;
   bytes payload = 3;
 }
 ```
 
-Gate 要求 `header` 存在、`service` 非空，根据 `IMessage.service` 查找目标业务服务：
+Gate 要求 `header` 存在、`service` 非空，根据 `ClientEnvelope.service` 查找目标业务服务：
 
 1. 先通过 `locator.Node(ctx, uid, service)` 查询玩家是否已经绑定到某个业务节点。
 2. 如果没有绑定，首次建立 `registry.Watch(service)` 后同步调用 `GetService` 初始化节点列表，再用 `selector.Selector` 选点；后续由监听更新。
@@ -131,7 +131,7 @@ Gate 要求 `header` 存在、`service` 非空，根据 `IMessage.service` 查�
 
 Mesh 回包到 Gate 后，Gate 根据 Broker 消息头中的 uid 找到本地 WebSocket session，并直接 `WriteBinary` 给客户端。
 
-下行 `OMessage` 也必须包含 `header`，其 `service` 是来源服务。响应省略 `result` 表示成功，失败携带非零错误码，主动推送省略 `result`。请求关联和业务消息体的选型规则见 [外层协议定义](idl/envelope/envelope.proto)。
+下行 `ServerEnvelope` 也必须包含 `header`，其 `service` 是来源服务。响应省略 `result` 表示成功，失败携带非零错误码，主动推送省略 `result`。请求关联和业务消息体的选型规则见 [外层协议定义](idl/envelope/envelope.proto)。
 
 ## Mesh 设计
 
@@ -216,7 +216,7 @@ data, tip, code, err := m.Request(subject, "hello", "v1", payload)
 
 框架把业务消息和集群路由信息分开：
 
-- `envelope.IMessage/OMessage`：客户端与业务层可感知的 protobuf envelope。
+- `envelope.ClientEnvelope` 封装上行请求，`envelope.ServerEnvelope` 封装下行响应或推送。
 - `broker.Header`：集群内部元数据，例如 uid、event、reply、fromService、toService。
 - `cluster.Subject`：broker subject 约定。
 

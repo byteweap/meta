@@ -49,7 +49,7 @@ func TestContextErrRespPublishesExpectedTip(t *testing.T) {
 			m.appName = "game"
 			c := newContext(m, &broker.Message{
 				Header: cluster.BuildHeader(42, cluster.EventBusiness, "meta.game.gate.gate-1", "gate", "game"),
-			}, &envelope.IMessage{Header: &envelope.Header{Seq: 7, Cmd: 1001, Version: 2}})
+			}, &envelope.ClientEnvelope{Header: &envelope.Header{Seq: 7, Cmd: 1001, Version: 2}})
 			defer c.release()
 
 			tc.call(c)
@@ -60,7 +60,7 @@ func TestContextErrRespPublishesExpectedTip(t *testing.T) {
 			require.Equal(t, int64(42), cluster.GetUIDBy(msg.Header))
 			require.Equal(t, "game", cluster.GetFromServiceBy(msg.Header))
 			require.Equal(t, "gate", cluster.GetToServiceBy(msg.Header))
-			out := &envelope.OMessage{}
+			out := &envelope.ServerEnvelope{}
 			require.NoError(t, proto.Unmarshal(msg.Data, out))
 			require.Equal(t, int32(code), out.GetResult().GetCode())
 			require.Equal(t, tc.tip, out.GetResult().GetTip())
@@ -95,7 +95,7 @@ func TestContextResponseStatus(t *testing.T) {
 			m.appName = "game"
 			c := newContext(m, &broker.Message{
 				Header: cluster.BuildHeader(42, cluster.EventBusiness, "meta.game.gate.gate-1", "gate", "game"),
-			}, &envelope.IMessage{Header: &envelope.Header{Seq: 7, Cmd: 1001, Version: 2}})
+			}, &envelope.ClientEnvelope{Header: &envelope.Header{Seq: 7, Cmd: 1001, Version: 2}})
 			defer c.release()
 
 			if tc.success {
@@ -105,7 +105,7 @@ func TestContextResponseStatus(t *testing.T) {
 			}
 
 			require.Len(t, bro.messages, 1)
-			var out envelope.OMessage
+			var out envelope.ServerEnvelope
 			require.NoError(t, proto.Unmarshal(bro.messages[0].Data, &out))
 			require.NotNil(t, out.GetHeader())
 			require.Equal(t, envelope.MsgType_RESPONSE, out.GetMsgType())

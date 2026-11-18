@@ -46,7 +46,7 @@ func (b *panicBroker) Reply(_ context.Context, msg *broker.Message, data []byte,
 	return nil
 }
 
-func runPanicMesh(t *testing.T, m *Mesh) {
+func runTestMesh(t testing.TB, m *Mesh) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	finished := make(chan error, 1)
@@ -60,7 +60,7 @@ func runPanicMesh(t *testing.T, m *Mesh) {
 		case err := <-finished:
 			require.NoError(t, err)
 		case <-stopCtx.Done():
-			t.Error("mesh did not stop after panic test")
+			t.Error("mesh did not stop")
 		}
 	})
 	select {
@@ -96,7 +96,7 @@ func TestMeshPanicBusinessAndEventsContinue(t *testing.T) {
 			m.OfflineHandler(handler)
 			m.ReconnectHandler(handler)
 			raw := mustBusinessMessage(t, 1, 1, "game", &envelope.Header{})
-			runPanicMesh(t, m)
+			runTestMesh(t, m)
 			for _, uid := range []int64{1, 2} {
 				bro.handler(&broker.Message{Header: sessionEventHeader(uid, event, "current"), Data: raw})
 			}
@@ -136,7 +136,7 @@ func TestMeshPanicRPCContinuesWithoutDuplicateReply(t *testing.T) {
 			processed := make(chan struct{})
 			m.Route(99, 1, func(*Mesh, *broker.Message, *envelope.ClientEnvelope) { close(processed) })
 			barrier := mustBusinessMessage(t, 99, 1, "game", &envelope.Header{})
-			runPanicMesh(t, m)
+			runTestMesh(t, m)
 			bro.handler(&broker.Message{Reply: "failed.reply", Header: broker.Header{"cmd": {"first"}, "version": {"v1"}}})
 			bro.handler(&broker.Message{Reply: "next.reply", Header: broker.Header{"cmd": {"next"}, "version": {"v1"}}})
 			bro.handler(&broker.Message{Data: barrier})

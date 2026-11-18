@@ -95,13 +95,13 @@ func TestRPCReplySurvivesMeshShutdown(t *testing.T) {
 
 func TestRPCReplyDeadlineRenewal(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		m := New()
-		first := m.replyContext()
+		var timer rpcReplyTimer
+		first := timer.context(t.Context())
 		time.Sleep(rpcReplyTimeout / 2)
-		require.Same(t, first, m.replyContext())
+		require.Same(t, first, timer.context(t.Context()))
 
 		time.Sleep(time.Nanosecond)
-		next := m.replyContext()
+		next := timer.context(t.Context())
 		require.ErrorIs(t, first.Err(), context.Canceled)
 		deadline, ok := next.Deadline()
 		require.True(t, ok)
@@ -201,7 +201,7 @@ func TestRPCDeadlineIncludesQueueTime(t *testing.T) {
 			t.Error("queued request started after its deadline")
 			return nil, "ok", http.StatusOK
 		}))
-		runPanicMesh(t, m)
+		runTestMesh(t, m)
 		bro.handler(&broker.Message{Reply: "first", Header: broker.Header{"cmd": {"slow"}, "version": {"1"}}})
 		<-entered
 		stamp := strconv.FormatInt(time.Now().Add(100*time.Millisecond).UnixMilli(), 10)
@@ -239,7 +239,7 @@ func TestRPCRequestCancellation(t *testing.T) {
 				bro := &rpcRequestBroker{}
 				m := New(Broker(bro), Locator(lifecycleLocator{}))
 				if cause != "stop before start" && cause != "start then stop" {
-					runPanicMesh(t, m)
+					runTestMesh(t, m)
 				}
 				entered := make(chan struct{})
 				bro.request = func(ctx context.Context, _ string, _ []byte, h broker.Header) (*broker.Message, error) {
@@ -273,7 +273,7 @@ func TestRPCRequestCancellation(t *testing.T) {
 				case "mesh stop", "stop before start":
 					require.NoError(t, m.Stop(t.Context()))
 				case "start then stop":
-					runPanicMesh(t, m)
+					runTestMesh(t, m)
 					require.NoError(t, m.Stop(t.Context()))
 				case "deadline":
 					want = context.DeadlineExceeded

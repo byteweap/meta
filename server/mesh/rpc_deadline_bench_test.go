@@ -42,3 +42,33 @@ func BenchmarkRPCDispatch(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkRPCReceive 测量单个在途请求从订阅回调到内存 Broker 收到回复的开销
+func BenchmarkRPCReceive(b *testing.B) {
+	for _, workers := range []int{0, 2} {
+		b.Run("workers="+strconv.Itoa(workers), func(b *testing.B) {
+			bro := &panicBroker{replies: make(chan panicReply, 1)}
+			opts := []Option{Broker(bro), Locator(lifecycleLocator{})}
+			if workers > 0 {
+				opts = append(opts, RPCConcurrency(workers, 16))
+			}
+			m := New(opts...)
+			m.RPCRoute("echo", "v1", WrapRPC(func(_ *RPCContext, req *wrapperspb.BytesValue) ([]byte, string, int) {
+				return req.Value, "", 200
+			}))
+			payload, err := proto.Marshal(wrapperspb.Bytes(make([]byte, 128)))
+			if err != nil {
+				b.Fatal(err)
+			}
+			msg := &broker.Message{Reply: "inbox", Header: broker.Header{"cmd": {"echo"}, "version": {"v1"}}, Data: payload}
+			runTestMesh(b, m)
+			b.ReportAllocs()
+			for b.Loop() {
+				bro.handler(msg)
+				if reply := <-bro.replies; reply.code != "200" || len(reply.data) != 128 {
+					b.Fatal("unexpected RPC reply")
+				}
+			}
+		})
+	}
+}

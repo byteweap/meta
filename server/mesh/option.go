@@ -14,8 +14,10 @@ const (
 
 // options 选项
 type options struct {
-	prefix            string                 // subject \ redis key 前缀
-	messageBufferSize int                    // 消息缓冲区大小
+	prefix            string // subject \ redis key 前缀
+	messageBufferSize int    // 消息缓冲区大小
+	rpcWorkers        int
+	rpcQueueSize      int
 	locator           locator.SessionLocator // 玩家位置与会话定位器
 	broker            broker.Broker          // 消息传输代理
 	discovery         registry.Registry
@@ -48,6 +50,16 @@ func MessageBufferSize(size int) Option {
 		if size > 0 {
 			o.messageBufferSize = size
 		}
+	}
+}
+
+// RPCConcurrency 设置入站服务 RPC 的固定 worker 数和等待队列容量
+// 默认 (0, 0) 让 RPC、客户端消息和会话事件串行执行。workers > 0 时只将 RPC 交给 worker
+// queueSize 为 0 时只使用 worker 的执行名额。执行与排队名额均用尽时回复 503
+// 参数为负、总容量溢出或仅配置队列时 Start 返回错误。开启后业务须同步与 RPC 共享的可变状态
+func RPCConcurrency(workers, queueSize int) Option {
+	return func(o *options) {
+		o.rpcWorkers, o.rpcQueueSize = workers, queueSize
 	}
 }
 

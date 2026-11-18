@@ -152,7 +152,7 @@ func TestRequestRouteDispatchByHeader(t *testing.T) {
 		t.Fatalf("marshal payload: %v", err)
 	}
 
-	m.handlerRequestReplyMessage(&broker.Message{
+	m.handlerMessage(&broker.Message{
 		Subject: "svc.request",
 		Reply:   "svc.reply",
 		Header: broker.Header{
@@ -197,7 +197,7 @@ func TestRequestRouteDispatchEmptyPayloadPassNil(t *testing.T) {
 		return nil, "ok", 200
 	})
 
-	m.handlerRequestReplyMessage(&broker.Message{
+	m.handlerMessage(&broker.Message{
 		Reply: "svc.reply",
 		Header: broker.Header{
 			"cmd":     []string{"2002"},
@@ -219,7 +219,7 @@ func TestRequestRouteErrorReply(t *testing.T) {
 		return []byte("ignored"), "bad request", 400
 	})
 
-	m.handlerRequestReplyMessage(&broker.Message{
+	m.handlerMessage(&broker.Message{
 		Reply: "svc.reply",
 		Header: broker.Header{
 			"cmd":     []string{"2003"},

@@ -71,7 +71,7 @@ func TestRequestRouteFastWithWrapRequest(t *testing.T) {
 		t.Fatalf("marshal payload: %v", err)
 	}
 
-	m.handlerRequestReplyMessage(&broker.Message{
+	m.handlerMessage(&broker.Message{
 		Reply: "svc.reply",
 		Header: broker.Header{
 			"cmd":     []string{"findUser"},

@@ -108,7 +108,7 @@ func TestGateDiscoveryInitialDispatchWaitsForSnapshot(t *testing.T) {
 	g := newInitialDiscoveryGate(t, reg, bro)
 	t.Cleanup(unblock)
 	session := &melody.Session{Keys: map[string]any{"uid": int64(42)}}
-	data, err := proto.Marshal(&envelope.IMessage{Service: "game", Header: &envelope.Header{Cmd: 1}})
+	data, err := proto.Marshal(&envelope.ClientEnvelope{Service: "game", Header: &envelope.Header{Cmd: 1}})
 	require.NoError(t, err)
 	finished := make(chan struct{})
 	go func() {

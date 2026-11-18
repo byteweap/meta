@@ -287,7 +287,8 @@ func TestGateSessionReplyRejectsOldConnectionWithSameSequence(t *testing.T) {
 		ownershipBroker: ownershipBroker{events: make(chan ownershipEvent, 16)},
 		downstream:      make(chan *broker.Message, 8),
 	}
-	srv := newOwnershipServer(t, loc, "gate-1", Locator(&sessionReplyLocator{loc}), Broker(bro), StrictSessionDelivery(true))
+	srv := newOwnershipServer(t, loc, "gate-1", testGameDiscovery(), testGateSelector(),
+		Locator(&sessionReplyLocator{loc}), Broker(bro), StrictSessionDelivery(true))
 	game := mesh.New(mesh.Broker(bro), mesh.Locator(loc))
 	requests := make(chan *mesh.Context, 2)
 	game.Route(1, 1, mesh.Wrap(func(ctx *mesh.Context, _ *envelope.Header) {

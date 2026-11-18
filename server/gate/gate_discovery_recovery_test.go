@@ -76,7 +76,7 @@ func (r *discoveryRecoveryRegistry) GetService(ctx context.Context, service stri
 	if r.get != nil {
 		return r.get(ctx, service, call)
 	}
-	return []*registry.ServiceInstance{{ID: fmt.Sprintf("node-%d", call), Name: service}}, nil
+	return []*registry.ServiceInstance{discoveryTestInstance(service, fmt.Sprintf("node-%d", (call+1)/2))}, nil
 }
 
 func newDiscoveryRecoveryGate(t *testing.T, r registry.Registry) *Gate {
@@ -130,7 +130,7 @@ func TestDiscoveryRecoveryInvalidatesFailedWatcher(t *testing.T) {
 	require.NotSame(t, old, current)
 	requireDiscoveryRecoveryNode(t, current, "node-2")
 	require.Equal(t, int32(2), r.watchCalls.Load())
-	require.Equal(t, int32(2), r.getCalls.Load())
+	require.Equal(t, int32(4), r.getCalls.Load())
 	require.Equal(t, int32(1), first.stopCalls.Load())
 }
 
@@ -180,10 +180,13 @@ func TestDiscoveryRecoveryWaitsForLateInitialSnapshot(t *testing.T) {
 	w.stopError = errors.New("late watcher close failed")
 	r := &discoveryRecoveryRegistry{
 		watchers: []*discoveryRecoveryWatcher{w},
-		get: func(context.Context, string, int32) ([]*registry.ServiceInstance, error) {
+		get: func(_ context.Context, _ string, call int32) ([]*registry.ServiceInstance, error) {
+			if call == 1 {
+				return initialDiscoverySnapshot("early"), nil
+			}
 			close(snapshotEntered)
 			<-releaseSnapshot // Simulate a registry returning despite cancellation.
-			return []*registry.ServiceInstance{{ID: "late", Name: "game"}}, nil
+			return initialDiscoverySnapshot("late"), nil
 		},
 	}
 	g := newDiscoveryRecoveryGate(t, r)
@@ -217,7 +220,7 @@ func TestDiscoveryRecoveryWaitsForLateInitialSnapshot(t *testing.T) {
 	_, err := g.ensure("game")
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, int32(1), r.watchCalls.Load())
-	require.Equal(t, int32(1), r.getCalls.Load())
+	require.Equal(t, int32(2), r.getCalls.Load())
 }
 
 func TestDiscoveryRecoverySharesCloseWithStop(t *testing.T) {

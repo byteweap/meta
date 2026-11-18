@@ -204,11 +204,11 @@ func (x *ClientEnvelope) GetPayload() []byte {
 	return nil
 }
 
-// ServerEnvelope 封装 Mesh 发往客户端的响应或主动推送，由 Gate 转发
+// ServerEnvelope 封装 Mesh 发往客户端的响应或主动推送，也用于 Gate 直接回复准入和转发错误
 type ServerEnvelope struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Header  *Header                `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`                    // 必填。RESPONSE 回填原请求的 seq、cmd、version
-	Service string                 `protobuf:"bytes,2,opt,name=service,proto3" json:"service,omitempty"`                  // 来源业务服务名
+	Service string                 `protobuf:"bytes,2,opt,name=service,proto3" json:"service,omitempty"`                  // 来源服务名，Gate 直接回复时为 Gate 的服务名
 	Kind    MsgType                `protobuf:"varint,3,opt,name=kind,proto3,enum=envelope.MsgType" json:"kind,omitempty"` // RESPONSE 或 PUSH
 	// RESPONSE 省略时表示成功，失败时携带非零错误码。PUSH 必须省略
 	Error *ResponseError `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`

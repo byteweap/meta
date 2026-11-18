@@ -3,6 +3,8 @@ package gate
 import (
 	"crypto/rand"
 	"errors"
+	"net/http"
+	"time"
 
 	"github.com/olahol/melody"
 
@@ -116,8 +118,34 @@ func (g *Gate) handleBinaryMessage(s *melody.Session, msg []byte) {
 		log.Error("[websocket] business message is missing a session ID")
 		return
 	}
-	// 校验后直接发布 WebSocket 本次读取的字节
-	g.dispatch(uid, sessionID, incoming.GetService(), msg)
+	if err := g.dispatch(uid, sessionID, incoming.Service, msg); err != nil {
+		code := http.StatusServiceUnavailable
+		if errors.Is(err, errServiceNotFound) {
+			code = http.StatusNotFound
+		} else {
+			log.Errorf("[websocket] dispatch to %q failed, uid: %d, err: %v", incoming.Service, uid, err)
+		}
+		g.writeDispatchError(s, incoming.Header, code)
+	}
+}
+
+// 直接写入读取请求的连接，避免错误响应在重连后送到新会话
+func (g *Gate) writeDispatchError(s *melody.Session, request *envelope.Header, code int) {
+	data, err := proto.Marshal(&envelope.ServerEnvelope{
+		Header: &envelope.Header{
+			Seq: request.Seq, Cmd: request.Cmd, Version: request.Version,
+			SentAtUnixMs: time.Now().UnixMilli(),
+		},
+		Service: g.appName,
+		Kind:    envelope.MsgType_RESPONSE,
+		Error:   &envelope.ResponseError{Code: int32(code), Message: http.StatusText(code)},
+	})
+	if err == nil {
+		err = s.WriteBinary(data)
+	}
+	if err != nil {
+		log.Errorf("[websocket] send dispatch error response, seq: %d, err: %v", request.Seq, err)
+	}
 }
 
 // 错误时调用

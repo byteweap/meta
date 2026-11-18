@@ -21,10 +21,10 @@ message ClientEnvelope {
   bytes payload = 3;
 }
 
-// ServerEnvelope 封装 Mesh 发往客户端的响应或主动推送，由 Gate 转发
+// ServerEnvelope 封装 Mesh 发往客户端的响应或主动推送，也用于 Gate 直接回复准入和转发错误
 message ServerEnvelope {
   Header header = 1;  // 必填。RESPONSE 回填原请求的 seq、cmd、version
-  string service = 2; // 来源业务服务名
+  string service = 2; // 来源服务名，Gate 直接回复时为 Gate 的服务名
   MsgType kind = 3;   // RESPONSE 或 PUSH
   // RESPONSE 省略时表示成功，失败时携带非零错误码。PUSH 必须省略
   ResponseError error = 4;

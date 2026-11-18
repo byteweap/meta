@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/byteweap/meta/component/broker"
+	"github.com/byteweap/meta/component/selector"
 	"github.com/byteweap/meta/internal/cluster"
 )
 
@@ -33,9 +34,18 @@ func (b *envelopeTestBroker) Pub(ctx context.Context, subject string, data []byt
 	return b.testBroker.Pub(ctx, subject, data, opts...)
 }
 
+func testGameDiscovery() Option {
+	return Discovery(&testRegistry{watcher: newInitialDiscoveryWatcher()})
+}
+
+func testGateSelector() Option {
+	return SelectorFunc(func() selector.Selector { return &testSelector{} })
+}
+
 func TestGateBinaryEnvelopeForwardsOriginalBytes(t *testing.T) {
 	bro := &envelopeTestBroker{}
-	g := New(Locator(&envelopeTestLocator{}), Broker(bro))
+	g := New(testGameDiscovery(), testGateSelector(), Locator(&envelopeTestLocator{}), Broker(bro))
+	t.Cleanup(func() { require.NoError(t, g.Stop(context.Background())) })
 	g.appName = "gate"
 	session := &melody.Session{Keys: map[string]any{"uid": int64(42), cluster.FieldNameSessionID: "original"}}
 	g.sessions.replace(42, &melody.Session{Keys: map[string]any{cluster.FieldNameSessionID: "replacement"}})
@@ -46,6 +56,7 @@ func TestGateBinaryEnvelopeForwardsOriginalBytes(t *testing.T) {
 
 	require.Equal(t, []string{"meta.gate.game.game-1"}, bro.pubSubjects)
 	require.Equal(t, frame, bro.data)
+	require.Same(t, &frame[0], &bro.data[0])
 	require.Equal(t, "original", cluster.GetSessionIDBy(bro.header))
 }
 

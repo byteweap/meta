@@ -64,6 +64,15 @@ func (w *initialDiscoveryWatcher) Next() ([]*registry.ServiceInstance, error) {
 	}
 }
 
+func (w *initialDiscoveryWatcher) send(t *testing.T, instances []*registry.ServiceInstance) {
+	t.Helper()
+	select {
+	case w.updates <- instances:
+	case <-time.After(time.Second):
+		t.Fatal("watcher did not receive the snapshot")
+	}
+}
+
 func (w *initialDiscoveryWatcher) Stop() error {
 	w.stops.Add(1)
 	w.closed.Do(func() { close(w.done) })
@@ -86,17 +95,22 @@ func newInitialDiscoveryGate(t *testing.T, reg registry.Registry, bro *testBroke
 }
 
 func initialDiscoverySnapshot(id string) []*registry.ServiceInstance {
-	return []*registry.ServiceInstance{{ID: id, Name: "game", Version: "v1", Metadata: map[string]string{"weight": "2"}}}
+	return []*registry.ServiceInstance{discoveryTestInstance("game", id)}
+}
+
+func discoveryTestInstance(service, id string) *registry.ServiceInstance {
+	return &registry.ServiceInstance{ID: id, Name: service, Version: "v1", Metadata: map[string]string{"weight": "2"}}
 }
 
 func TestGateDiscoveryInitialDispatchWaitsForSnapshot(t *testing.T) {
 	w := newInitialDiscoveryWatcher()
 	entered, release := make(chan struct{}), make(chan struct{})
 	unblock := sync.OnceFunc(func() { close(release) })
+	signal := sync.OnceFunc(func() { close(entered) })
 	reg := &initialDiscoveryRegistry{
 		watch: func(context.Context, string) (registry.Watcher, error) { return w, nil },
 		get: func(ctx context.Context, _ string) ([]*registry.ServiceInstance, error) {
-			close(entered)
+			signal()
 			select {
 			case <-release:
 				return initialDiscoverySnapshot("game-first"), nil
@@ -117,7 +131,7 @@ func TestGateDiscoveryInitialDispatchWaitsForSnapshot(t *testing.T) {
 		close(finished)
 	}()
 	awaitBackground(t, entered)
-	require.Equal(t, int32(1), reg.watchCount.Load(), "watch must be established before the initial snapshot")
+	require.Zero(t, reg.watchCount.Load(), "a pending service lookup must not create a watcher")
 	select {
 	case <-finished:
 		t.Fatal("first dispatch returned before the initial snapshot was loaded")
@@ -133,45 +147,73 @@ func TestGateDiscoveryInitialDispatchWaitsForSnapshot(t *testing.T) {
 	subjects := append([]string(nil), bro.pubSubjects...)
 	bro.mu.Unlock()
 	require.Equal(t, []string{"meta.gate.game.game-first"}, subjects)
-	require.Equal(t, int32(1), reg.getCount.Load())
+	require.Equal(t, int32(2), reg.getCount.Load())
 }
 
-func TestGateDiscoveryInitialEmptySnapshotCanReceiveUpdates(t *testing.T) {
-	w := newInitialDiscoveryWatcher()
+func TestGateDispatchTracksServiceAvailability(t *testing.T) {
+	var instances []*registry.ServiceInstance
+	var watcher *initialDiscoveryWatcher
 	reg := &initialDiscoveryRegistry{
-		watch: func(context.Context, string) (registry.Watcher, error) { return w, nil },
-		get:   func(context.Context, string) ([]*registry.ServiceInstance, error) { return nil, nil },
+		watch: func(context.Context, string) (registry.Watcher, error) {
+			watcher = newInitialDiscoveryWatcher()
+			return watcher, nil
+		},
+		get: func(context.Context, string) ([]*registry.ServiceInstance, error) { return instances, nil },
+	}
+	bro := &testBroker{}
+	var bound string
+	g := New(Discovery(reg), testGateSelector(), Broker(bro),
+		Locator(&dispatchTestLocator{node: func() (string, error) { return bound, nil }}))
+	g.appName, g.appID = "gate", "gate-1"
+	t.Cleanup(func() { require.NoError(t, g.Stop(context.Background())) })
+	dispatch := func() error { return g.dispatch(42, "session-42", "match", nil) }
+	require.ErrorIs(t, dispatch(), errServiceNotFound)
+	require.Zero(t, reg.watchCount.Load())
+
+	// 实例只提供服务名和 ID，Gate 即可转发
+	instances = []*registry.ServiceInstance{{Name: "match", ID: "match-1"}}
+	require.NoError(t, dispatch())
+	require.NoError(t, dispatch())
+	require.EqualValues(t, 3, reg.getCount.Load(), "cached dispatch must not query the registry")
+	require.EqualValues(t, 1, reg.watchCount.Load())
+
+	instances = []*registry.ServiceInstance{{Name: "match", ID: "match-2"}}
+	watcher.send(t, instances)
+	current := g.cachedDiscovery("match")
+	require.Eventually(t, func() bool { return current.hasNode("match-2") }, time.Second, time.Millisecond)
+	bound = "match-1"
+	require.ErrorIs(t, dispatch(), selector.ErrNoAvailableNode)
+	bound = "match-2"
+	require.NoError(t, dispatch())
+
+	instances = nil
+	watcher.send(t, instances)
+	awaitBackground(t, watcher.done)
+	require.Nil(t, g.cachedDiscovery("match"))
+	require.ErrorIs(t, dispatch(), errServiceNotFound)
+
+	instances = []*registry.ServiceInstance{{Name: "match", ID: "match-3"}}
+	bound = ""
+	require.NoError(t, dispatch())
+	require.EqualValues(t, 2, reg.watchCount.Load())
+	require.Equal(t, []string{"meta.gate.match.match-1", "meta.gate.match.match-1", "meta.gate.match.match-2", "meta.gate.match.match-3"}, bro.pubSubjects)
+}
+
+func TestGateServiceDisappearsWhileSubscribing(t *testing.T) {
+	w := newInitialDiscoveryWatcher()
+	reg := &initialDiscoveryRegistry{}
+	reg.watch = func(context.Context, string) (registry.Watcher, error) { return w, nil }
+	reg.get = func(context.Context, string) ([]*registry.ServiceInstance, error) {
+		if reg.watchCount.Load() == 0 {
+			return initialDiscoverySnapshot("game-1"), nil
+		}
+		return nil, nil
 	}
 	g := newInitialDiscoveryGate(t, reg, &testBroker{})
-	type result struct {
-		sel selector.Selector
-		err error
-	}
-	ensured := make(chan result, 1)
-	go func() {
-		sel, err := g.ensure("game")
-		ensured <- result{sel, err}
-	}()
-	got := awaitBackground(t, ensured)
-	require.NoError(t, got.err)
-	require.NotNil(t, got.sel)
-	_, err := got.sel.Select("42")
-	require.ErrorIs(t, err, selector.ErrNoAvailableNode)
-	awaitBackground(t, w.next)
-	select {
-	case w.updates <- initialDiscoverySnapshot("game-later"):
-	case <-time.After(time.Second):
-		t.Fatal("watcher did not receive the service update")
-	}
-	require.Eventually(t, func() bool {
-		node, selectErr := got.sel.Select("42")
-		return selectErr == nil && node.ID() == "game-later"
-	}, time.Second, time.Millisecond)
-	current, err := g.ensure("game")
-	require.NoError(t, err)
-	require.Same(t, got.sel, current)
-	require.Equal(t, int32(1), reg.watchCount.Load())
-	require.Equal(t, int32(1), reg.getCount.Load())
+	_, err := g.ensure("game")
+	require.ErrorIs(t, err, errServiceNotFound)
+	require.Nil(t, g.cachedDiscovery("game"))
+	require.EqualValues(t, 1, w.stops.Load())
 }
 
 func TestGateDiscoveryInitialFailureClosesWatcherAndRetries(t *testing.T) {
@@ -185,7 +227,7 @@ func TestGateDiscoveryInitialFailureClosesWatcherAndRetries(t *testing.T) {
 		return second, nil
 	}
 	reg.get = func(context.Context, string) ([]*registry.ServiceInstance, error) {
-		if reg.getCount.Load() == 1 {
+		if reg.getCount.Load() == 2 {
 			return nil, failure
 		}
 		return initialDiscoverySnapshot("game-retry"), nil
@@ -206,7 +248,7 @@ func TestGateDiscoveryInitialFailureClosesWatcherAndRetries(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "game-retry", node.ID())
 	require.Equal(t, int32(2), reg.watchCount.Load())
-	require.Equal(t, int32(2), reg.getCount.Load())
+	require.Equal(t, int32(4), reg.getCount.Load())
 	require.NoError(t, g.Stop(context.Background()))
 	require.Equal(t, int32(1), first.stops.Load())
 	require.Equal(t, int32(1), second.stops.Load())
@@ -230,7 +272,7 @@ func TestGateDiscoveryInitialWatchErrorClosesReturnedWatcher(t *testing.T) {
 	require.ErrorIs(t, err, failure)
 	require.Nil(t, sel)
 	require.Equal(t, int32(1), first.stops.Load())
-	require.Zero(t, reg.getCount.Load(), "a failed Watch must not start snapshot loading")
+	require.EqualValues(t, 1, reg.getCount.Load(), "a failed Watch must not start the second lookup")
 	select {
 	case <-first.next:
 		t.Fatal("a failed Watch must not start its update loop")
@@ -242,7 +284,7 @@ func TestGateDiscoveryInitialWatchErrorClosesReturnedWatcher(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "game-retry", node.ID())
 	require.Equal(t, int32(2), reg.watchCount.Load(), "the failed attempt must not remain cached")
-	require.Equal(t, int32(1), reg.getCount.Load())
+	require.Equal(t, int32(3), reg.getCount.Load())
 	require.NoError(t, g.Stop(context.Background()))
 	require.Equal(t, int32(1), first.stops.Load())
 	require.Equal(t, int32(1), second.stops.Load())
@@ -254,7 +296,12 @@ func TestGateDiscoveryInitialFailurePreservesCleanupError(t *testing.T) {
 	failure := errors.New("initial snapshot failed")
 	reg := &initialDiscoveryRegistry{
 		watch: func(context.Context, string) (registry.Watcher, error) { return w, nil },
-		get:   func(context.Context, string) ([]*registry.ServiceInstance, error) { return nil, failure },
+	}
+	reg.get = func(context.Context, string) ([]*registry.ServiceInstance, error) {
+		if reg.getCount.Load() == 2 {
+			return nil, failure
+		}
+		return initialDiscoverySnapshot("game-1"), nil
 	}
 	g := New(Discovery(reg), SelectorFunc(func() selector.Selector { return &testSelector{} }))
 	t.Cleanup(func() {
@@ -274,10 +321,11 @@ func TestGateDiscoveryInitialConcurrentCallsShareReadySelector(t *testing.T) {
 	w := newInitialDiscoveryWatcher()
 	entered, release := make(chan struct{}), make(chan struct{})
 	unblock := sync.OnceFunc(func() { close(release) })
+	signal := sync.OnceFunc(func() { close(entered) })
 	reg := &initialDiscoveryRegistry{
 		watch: func(context.Context, string) (registry.Watcher, error) { return w, nil },
 		get: func(ctx context.Context, _ string) ([]*registry.ServiceInstance, error) {
-			close(entered)
+			signal()
 			select {
 			case <-release:
 				return initialDiscoverySnapshot("game-shared"), nil
@@ -328,5 +376,5 @@ func TestGateDiscoveryInitialConcurrentCallsShareReadySelector(t *testing.T) {
 		require.Same(t, shared, got.sel)
 	}
 	require.Equal(t, int32(1), reg.watchCount.Load())
-	require.Equal(t, int32(1), reg.getCount.Load())
+	require.Equal(t, int32(2), reg.getCount.Load())
 }

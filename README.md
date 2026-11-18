@@ -118,14 +118,14 @@ message ClientEnvelope {
 }
 ```
 
-Gate 要求 `header` 存在、`service` 非空，根据 `ClientEnvelope.service` 查找目标业务服务：
+业务服务启动并注册可用实例后，Gate 即可转发客户端请求。新增服务无需修改配置或重启 Gate。Gate 根据请求的 `service` 名和注册中心的实例列表判断可用性，具体 `cmd/version` 由 Mesh 处理。即使服务只注册了 RPC 路由，客户端业务帧也会转发到该服务，由 Mesh 对未知命令回复 404。
 
-1. 先通过 `locator.Node(ctx, uid, service)` 查询玩家是否已经绑定到某个业务节点。
-2. 如果没有绑定，首次建立 `registry.Watch(service)` 后同步调用 `GetService` 初始化节点列表，再用 `selector.Selector` 选点；后续由监听更新。
-3. 使用 `cluster.BuildHeader` 写入 uid、事件类型、reply subject、来源服务和目标服务，并从实际收到帧的连接带上 `session_id`。
-4. 将客户端的原始 Protobuf 字节发布到目标 subject：`<prefix>.<gateName>.<service>.<nodeID>`。
+1. Gate 读取请求的 `header` 和 `service`。首次请求按服务名查询注册中心，空结果直接回复 404。同名服务的并发请求共用一次初始化。
+2. 发现可用实例后，Gate 建立监听并再取一次快照，覆盖首次查询与监听建立之间的变化。后续请求直接使用本地快照。实例全部下线或监听失败时，Gate 清除缓存，下次请求重新发现。
+3. Gate 通过 `locator.Node(ctx, uid, service)` 查询玩家绑定。已绑定时只发给快照中的原实例，绑定失效则回复 503。未绑定时由选择器选取可用实例。
+4. Gate 将客户端的原始 Protobuf 帧发往 `<prefix>.<gateName>.<service>.<nodeID>`，并在 Broker 消息头携带 uid、事件类型、回复地址、来源与目标服务，以及读取请求的连接的 `session_id`。
 
-同服务的并发请求共用一次发现初始化。空快照正常返回无可用节点，后续更新仍可恢复路由；初始化失败时释放资源，下一请求可重试。监听出错后清空旧节点并移除对应缓存，由后续请求重新建立发现任务。
+注册中心查询、监听初始化、定位、选点或发布失败时，Gate 在原 WebSocket 连接上回复 503。Gate 的 404 和 503 均为 `RESPONSE`，来源为 Gate，回填原 `seq/cmd/version`，包括 `seq=0`。组件错误详情记入服务端日志。发布成功后若收不到业务响应，客户端通过请求截止时间结束等待。
 
 发现任务的关闭只执行一次，初始化与关闭都纳入 Gate.Stop 等待。旧监听关闭阻塞不会阻止新请求重建，关闭错误会保留在停止结果中。GetService 与 Watch 没有共同的版本协议，因此快照查询和后续通知之间不提供强一致保证。
 
@@ -135,7 +135,7 @@ Mesh 的 `OkResp` / `ErrResp` 在 Broker 头标记 `delivery=response`，并回�
 
 下行 `ServerEnvelope` 也必须包含 `header`，其 `service` 是来源服务，`kind` 区分 `RESPONSE` 和 `PUSH`。成功响应与推送均省略 `error`；失败响应携带 `error.code`（非零错误码），可附带 `error.message`。业务消息体的选型规则见 [外层协议定义](idl/envelope/envelope.proto)。
 
-`header.seq` 用于请求与响应关联，响应回填原值；`0` 表示无需关联。框架不要求它递增，也不据此排序或去重。`header.sent_at_unix_ms` 是发送方的 Unix 毫秒时间戳，`0` 表示未提供；框架响应填写 Mesh 发送方的时间，不回填客户端时间，也不使用客户端时钟判断消息顺序。
+`header.seq` 用于请求与响应关联，响应回填原值；`0` 表示无需关联。框架不要求它递增，也不据此排序或去重。`header.sent_at_unix_ms` 是发送方的 Unix 毫秒时间戳，`0` 表示未提供。响应由生成它的 Gate 或 Mesh 填写发送时间，框架不依赖客户端时钟判断消息顺序。
 
 ## Mesh 设计
 

@@ -3,11 +3,13 @@ package gate
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"runtime/debug"
 
 	"github.com/byteweap/meta/component/broker"
 	"github.com/byteweap/meta/component/log"
+	"github.com/byteweap/meta/component/selector"
 	"github.com/byteweap/meta/internal/cluster"
 	"github.com/byteweap/meta/pkg/async"
 	"github.com/byteweap/meta/pkg/conv"
@@ -91,32 +93,26 @@ func (g *Gate) replyError(reqMsg *broker.Message, code int, tip string) error {
 	return g.opts.broker.Reply(g.ctx, reqMsg, nil, broker.ReplyHeader(header))
 }
 
-// 将已校验的业务消息原样分发至 Mesh
-func (g *Gate) dispatch(uid int64, sessionID, toService string, data []byte) {
-	if toService == "" {
-		log.Errorf("[websocket] dispatch error, uid: %v, service is empty", uid)
-		return
-	}
-
-	curNodeID, err := g.opts.locator.Node(g.ctx, uid, toService)
+// 将业务帧原样转发至注册中心当前可用的目标实例
+func (g *Gate) dispatch(uid int64, sessionID, toService string, data []byte) error {
+	d, err := g.ensure(toService)
 	if err != nil {
-		log.Errorf("[websocket] dispatch | get mesh node error, uid: %v, toService: %v, err: %v", uid, toService, err)
-		return
+		return err
+	}
+	nodeID, err := g.opts.locator.Node(g.ctx, uid, toService)
+	if err != nil {
+		return fmt.Errorf("locate node: %w", err)
 	}
 
-	nodeID := curNodeID
-	if curNodeID == "" {
-		sel, ensureErr := g.ensure(toService)
-		if ensureErr != nil {
-			log.Errorf("[websocket] dispatch | get mesh node error, uid: %v, toService: %v, err: %v", uid, toService, ensureErr)
-			return
-		}
-		node, selectErr := sel.Select(conv.String(uid))
+	if nodeID == "" {
+		node, selectErr := d.Select(conv.String(uid))
 		if selectErr != nil {
-			log.Errorf("[websocket] dispatch | select mesh node error, uid: %v, toService: %v, err: %v", uid, toService, selectErr)
-			return
+			return fmt.Errorf("select node: %w", selectErr)
 		}
 		nodeID = node.ID()
+	} else if !d.hasNode(nodeID) {
+		// 有状态业务不能在绑定失效时改投其他实例
+		return fmt.Errorf("bound node %q: %w", nodeID, selector.ErrNoAvailableNode)
 	}
 	// 构建消息头
 	var (
@@ -127,10 +123,10 @@ func (g *Gate) dispatch(uid int64, sessionID, toService string, data []byte) {
 	// 发布消息到 Mesh
 	subject := cluster.Subject(g.opts.prefix, g.appName, toService, nodeID)
 	if err := g.opts.broker.Pub(g.ctx, subject, data, broker.PubHeader(header)); err != nil {
-		log.Errorf("[websocket] dispatch error, uid: %v, subject: %v, err: %v", uid, subject, err)
-		return
+		return fmt.Errorf("publish to %s: %w", subject, err)
 	}
 	log.Debugf("[websocket] dispatch success, uid: %v, subject: %v", uid, subject)
+	return nil
 }
 
 // 广播系统事件

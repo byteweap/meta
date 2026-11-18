@@ -182,8 +182,8 @@ func (r *testRegistry) Register(context.Context, *registry.ServiceInstance) erro
 
 func (r *testRegistry) Deregister(context.Context, *registry.ServiceInstance) error { return nil }
 
-func (r *testRegistry) GetService(context.Context, string) ([]*registry.ServiceInstance, error) {
-	return nil, nil
+func (r *testRegistry) GetService(_ context.Context, service string) ([]*registry.ServiceInstance, error) {
+	return []*registry.ServiceInstance{discoveryTestInstance(service, service+"-1")}, nil
 }
 
 func (r *testRegistry) Watch(context.Context, string) (registry.Watcher, error) {

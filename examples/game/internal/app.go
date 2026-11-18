@@ -30,8 +30,8 @@ func New() (*server.Server, func(), error) {
 	)
 
 	e := event.New(g)
-	g.Route(1, 1, mesh.Wrap(e.EnterGame))
-	g.Route(2, 1, mesh.Wrap(e.ExitGame))
+	g.Route(1, 1, mesh.Handle(e.EnterGame))
+	g.Route(2, 1, mesh.Handle(e.ExitGame))
 
 	r := rpc.New(g)
 	g.RPCRoute("hello", "v1", mesh.WrapRPC(r.Hello))

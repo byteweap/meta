@@ -7,6 +7,7 @@ import (
 	"github.com/byteweap/meta/component/broker"
 	"github.com/byteweap/meta/encoding/proto"
 	"github.com/byteweap/meta/envelope"
+	"github.com/byteweap/meta/internal/cluster"
 )
 
 func TestRouteFastWithWrap(t *testing.T) {
@@ -21,8 +22,7 @@ func TestRouteFastWithWrap(t *testing.T) {
 
 	raw := mustBusinessMessage(t, 3001, 1, "game", &envelope.Header{Cmd: 3001})
 
-	h := mustLoadRouteHandler(t, m, 3001, 1)
-	invokeRouteHandler(t, h, m, &broker.Message{Data: raw}, raw)
+	m.handlerPubSubMessage(&broker.Message{Data: raw})
 	if !called {
 		t.Fatalf("route fast handler not called")
 	}
@@ -92,4 +92,37 @@ func TestRequestRouteFastWithWrapRequest(t *testing.T) {
 	if mb.replyHdr.Get("code") != "200" || mb.replyHdr.Get("tip") != "ok" {
 		t.Fatalf("unexpected reply header: %+v", mb.replyHdr)
 	}
+}
+
+func TestRouteOnlineEventWithoutCallback(t *testing.T) {
+	m := New()
+	m.Route(1, 1, Wrap(func(*Context, *envelope.Header) {
+		t.Fatal("online event reached business handler")
+	}))
+	m.handlerPubSubMessage(&broker.Message{
+		Header: cluster.BuildHeader(7, cluster.EventOnline, "", "gate", "game"),
+		Data:   mustBusinessMessage(t, 1, 1, "game", nil),
+	})
+}
+
+// mustBusinessMessage 构造业务消息封包
+func mustBusinessMessage(t *testing.T, cmd, version uint32, service string, payload *envelope.Header) []byte {
+	t.Helper()
+
+	p, err := proto.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	raw, err := proto.Marshal(&envelope.ClientEnvelope{
+		Header: &envelope.Header{
+			Cmd:     cmd,
+			Version: version,
+		},
+		Service: service,
+		Payload: p,
+	})
+	if err != nil {
+		t.Fatalf("marshal gate envelope: %v", err)
+	}
+	return raw
 }

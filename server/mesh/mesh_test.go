@@ -25,11 +25,7 @@ func FindUser(_ *mesh.RPCContext, _ *Params) ([]byte, string, int) {
 func TestMesh(_ *testing.T) {
 	app := mesh.New()
 
-	// 1. Gate 消息路由
-	// 	1.1. 写法简单,但使用反射,有性能开销, 不推荐用于高频路由
-	app.RouteX(1, 1, EnterGame)
-	// 	1.2. 推荐写法, 避免反射调用, 推荐用于高频路由
-	app.Route(2, 1, mesh.Wrap(EnterGame))
+	app.Route(1, 1, mesh.Wrap(EnterGame))
 
 	// 2. Request 消息路由
 	// 	2.1. 写法简单,但使用反射,有性能开销, 不推荐用于高频路由

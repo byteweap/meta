@@ -1,13 +1,15 @@
 package event
 
 import (
+	"context"
+
 	"github.com/byteweap/meta/component/log"
 	"github.com/byteweap/meta/examples/game/internal/pb"
 	"github.com/byteweap/meta/server/mesh"
 )
 
-// EnterGame 进入游戏
-func (h *EventHandler) EnterGame(ctx *mesh.Context, req *pb.EnterGameRequest) {
-	log.Infof("EnterGame, ctx: %v, req: %v", ctx, req.String())
-	ctx.OkResp()
+// EnterGame 记录进入游戏的玩家并返回空的成功响应
+func (h *EventHandler) EnterGame(_ context.Context, caller mesh.Caller, req *pb.EnterGameRequest) (*pb.EnterGameResponse, error) {
+	log.Infof("EnterGame, uid: %d, req: %v", caller.UID, req)
+	return nil, nil
 }

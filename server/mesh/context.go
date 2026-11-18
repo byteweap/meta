@@ -18,7 +18,6 @@ type Context struct {
 	// broker message
 	subject   string
 	reply     string // 回复的subject(由发送方传入)
-	event     cluster.Event
 	uid       int64
 	sessionID string
 
@@ -52,17 +51,7 @@ func (c *Context) release() {
 	if c == nil {
 		return
 	}
-	c.subject = ""
-	c.event = ""
-	c.uid = 0
-	c.sessionID = ""
-
-	c.seq = 0
-	c.fromService = ""
-	c.toApp = ""
-	c.cmd = 0
-	c.version = 0
-	c.mesh = nil
+	*c = Context{}
 	ctxPool.Put(c)
 }
 
@@ -75,17 +64,9 @@ func (c *Context) reset(mesh *Mesh, msg *broker.Message, e *envelope.ClientEnvel
 	c.reply = cluster.GetReplyBy(msg.Header)
 	c.fromService = cluster.GetFromServiceBy(msg.Header)
 	c.toApp = cluster.GetToServiceBy(msg.Header)
-	c.event = cluster.GetEventBy(msg.Header)
 	c.uid = cluster.GetUIDBy(msg.Header)
 	c.sessionID = cluster.GetSessionIDBy(msg.Header)
 
-	if e == nil || e.GetHeader() == nil {
-		c.seq = 0
-		c.cmd = 0
-		c.version = 0
-		c.timestamp = 0
-		return
-	}
 	header := e.GetHeader()
 	c.seq = header.GetSeq()
 	c.cmd = header.GetCmd()
@@ -138,60 +119,26 @@ func (c *Context) Copy() *Context {
 	if c == nil {
 		return &Context{}
 	}
-	return &Context{
-		subject:     c.subject,
-		reply:       c.reply,
-		event:       c.event,
-		uid:         c.uid,
-		sessionID:   c.sessionID,
-		seq:         c.seq,
-		fromService: c.fromService,
-		toApp:       c.toApp,
-		cmd:         c.cmd,
-		version:     c.version,
-		timestamp:   c.timestamp,
-		mesh:        c.mesh,
-	}
+	copied := *c
+	return &copied
 }
 
-// OkResp 返回成功响应
+// OkResp 返回成功响应，首个业务消息编码失败时回复通用 500
 func (c *Context) OkResp(args ...proto.Message) {
-	out := &envelope.ServerEnvelope{
-		Header: &envelope.Header{
-			Seq:          c.Seq(),
-			Cmd:          c.Cmd(),
-			Version:      c.Version(),
-			SentAtUnixMs: time.Now().UnixMilli(),
-		},
-		Service: c.mesh.appName,
-		Kind:    envelope.MsgType_RESPONSE,
-	}
-
-	var err error
+	var payload []byte
 	if len(args) > 0 {
-		out.Payload, err = proto.Marshal(args[0])
+		var err error
+		payload, err = proto.Marshal(args[0])
 		if err != nil {
-			log.Errorf("[mesh].[OkResponse] marshal payload error, err: %v", err)
+			log.Errorf("mesh marshal response payload: %v", err)
+			c.ErrResp(http.StatusInternalServerError)
 			return
 		}
 	}
-	bytes, err := proto.Marshal(out)
-	if err != nil {
-		log.Errorf("[mesh].[OkResponse] marshal message error, err: %v", err)
-		return
-	}
-	// 发送
-	if c.reply == "" {
-		log.Errorf("[mesh].[OkResponse] reply subject is empty")
-		return
-	}
-	if err = c.mesh.sendResponse(c.reply, c.fromService, bytes, c.uid, c.sessionID); err != nil {
-		log.Errorf("[mesh].[OkResponse] send message error, subject: %v, err: %v", c.reply, err)
-		return
-	}
+	c.respond(payload, nil)
 }
 
-// ErrResp 返回错误响应
+// ErrResp 返回错误响应。code 必须为非零 int32，越界或零值映射为 500
 func (c *Context) ErrResp(code int, args ...string) {
 	wireCode := int32(code)
 	if code == 0 || int(wireCode) != code {
@@ -203,33 +150,31 @@ func (c *Context) ErrResp(code int, args ...string) {
 	if len(args) > 0 {
 		message = args[0]
 	}
+	c.respond(nil, &envelope.ResponseError{Code: wireCode, Message: message})
+}
 
+func (c *Context) respond(payload []byte, failure *envelope.ResponseError) {
+	if c.reply == "" {
+		log.Error("mesh response: reply subject is empty")
+		return
+	}
 	out := &envelope.ServerEnvelope{
 		Header: &envelope.Header{
-			Seq:          c.Seq(),
-			Cmd:          c.Cmd(),
-			Version:      c.Version(),
+			Seq: c.seq, Cmd: c.cmd, Version: c.version,
 			SentAtUnixMs: time.Now().UnixMilli(),
 		},
 		Service: c.mesh.appName,
 		Kind:    envelope.MsgType_RESPONSE,
-		Error: &envelope.ResponseError{
-			Code:    wireCode,
-			Message: message,
-		},
+		Error:   failure,
+		Payload: payload,
 	}
-	bytes, err := proto.Marshal(out)
+	data, err := proto.Marshal(out)
 	if err != nil {
-		log.Errorf("[mesh].[ErrResponse] marshal message error, err: %v", err)
+		log.Errorf("mesh marshal response: %v", err)
 		return
 	}
-	// 发送
-	if c.reply == "" {
-		log.Errorf("[mesh].[ErrResponse] reply subject is empty")
-		return
-	}
-	if err = c.mesh.sendResponse(c.reply, c.fromService, bytes, c.uid, c.sessionID); err != nil {
-		log.Errorf("[mesh].[ErrResponse] send message error, subject: %v, err: %v", c.reply, err)
+	if err := c.mesh.sendResponse(c.reply, c.fromService, data, c.uid, c.sessionID); err != nil {
+		log.Errorf("mesh publish response to %s: %v", c.reply, err)
 	}
 }
 

@@ -158,25 +158,25 @@ Gate/Mesh 在每条 broker 消息的处理入口恢复 panic，记录异常及�
 
 Mesh 校验客户端业务消息包含 `header`，再按 `header.cmd` 和 `header.version` 定位处理器。底层路由键使用 `uint64(cmd)<<32 | uint64(version)`，避免字符串拼接开销。
 
-Mesh 支持两类注册方式：
+对有响应的客户端命令，用 `mesh.Handle` 绑定类型化请求和返回值。Gate 提供已认证 UID，Mesh 负责解码、调用和回包。
 
 ```go
-// 推荐：业务函数签名简单，RouteX 内部反射适配
-m.RouteX(1, 1, func(ctx *mesh.Context, req *EnterGameReq) {
-    ctx.OkResp(&EnterGameResp{})
-})
+func EnterGame(ctx context.Context, caller mesh.Caller, req *pb.EnterGameRequest) (*pb.EnterGameResponse, error) {
+    return &pb.EnterGameResponse{}, nil
+}
 
-// 热点路径：显式包装，运行期不经过反射调用
-m.Route(1, 1, mesh.Wrap(EnterGame))
+// 在初始化 Mesh 时注册
+m.Route(1, 1, mesh.Handle(EnterGame))
 ```
 
-`mesh.Wrap[T]` 会统一完成：
+- 空 payload 传入 nil 请求。返回 `nil, nil` 表示成功且无响应体。响应回填原请求的 `seq/cmd/version` 和 Broker 会话身份，包括 `seq=0` 的请求。
+- 业务可返回 `&mesh.ClientError{Code: 409, Message: "room full"}`，也可用 `%w` 包装。错误码必须非零，提示须为有效 UTF-8。普通错误、无效业务错误、响应体编码失败和类型化处理器 panic 均返回通用 500。
+- 客户端路由不存在时返回 404。框架解码业务 payload 失败时返回 400。错误回包依赖可解析的外层 header 和可用的回复地址。
+- handler 收到的标准 context 随 Mesh 停止而取消。客户端取消等待后，已经发出的请求仍可执行。
 
-- 从对象池获取 `mesh.Context`，用 Broker 消息头和 envelope 的 `header` 初始化。
-- 解码非空的 Protobuf `payload` 到 `*T`，再调用业务 handler。省略 `payload` 或长度为 0 时传入 `nil`。
-- handler 返回后释放 context 到 `sync.Pool`。
+需要单向处理或自行决定回包时机时，使用 `m.Route(cmd, version, mesh.Wrap(fn))`。其 `*mesh.Context` 提供请求元数据和 `OkResp/ErrResp`，handler 结束后归还对象池，异步使用前须调用 `Copy()`。
 
-`mesh.Context` 提供当前消息的 `UID/Seq/Cmd/Version/Subject/Timestamp/FromService/ToService`，并提供 `OkResp` 和 `ErrResp` 回包方法。若需要在新 goroutine 中使用上下文，应调用 `ctx.Copy()`，因为原始 context 会在 handler 结束后归还对象池。
+旧版 `m.RouteX(cmd, version, fn)` 已移除。若 `fn` 的签名为 `func(*mesh.Context, *T)`，将注册语句替换为 `m.Route(cmd, version, mesh.Wrap(fn))`；若已持有 `mesh.MessageHandler`，直接使用 `m.Route(cmd, version, fn)`。同一个命令和版本重复注册会在注册处 panic。
 
 ### 系统事件
 
@@ -315,8 +315,8 @@ srv := &GameServer{
     ),
 }
 
-srv.Route(1, 1, mesh.Wrap(EnterGame))
-srv.Route(2, 1, mesh.Wrap(ExitGame))
+srv.Route(1, 1, mesh.Handle(EnterGame))
+srv.Route(2, 1, mesh.Handle(ExitGame))
 srv.RPCRoute("hello", "v1", mesh.WrapRPC(Hello))
 
 err := meta.New(
@@ -344,7 +344,7 @@ Go 客户端 `client/gate` 支持并发请求，按 `seq` 匹配响应，使用�
 
 新增基础设施适配时，建议放在 `contrib/<component>/<provider>` 下，并实现 `component` 中对应接口。核心包不依赖任何具体 provider，这样可以避免把业务项目不需要的 SDK 带进主模块。
 
-高频业务路由建议使用 `Route + mesh.Wrap` 或 `RPCRoute + mesh.WrapRPC`，避免每次请求反射调用；低频或开发期路由可以使用 `RouteX/RPCRouteX` 获得更简洁的注册体验。
+服务间 RPC 的热点路径可用 `RPCRoute + mesh.WrapRPC` 直接调用业务函数。`RPCRouteX` 支持通过反射适配 RPC 函数签名。
 
 如果 handler 内需要异步处理，请复制 `mesh.Context`：
 

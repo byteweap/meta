@@ -1,8 +1,9 @@
 package cluster
 
 import (
+	"strconv"
+
 	"github.com/byteweap/meta/component/broker"
-	"github.com/byteweap/meta/pkg/conv"
 )
 
 const (
@@ -26,7 +27,7 @@ const (
 // BuildHeader 构建必备请求头
 func BuildHeader(uid int64, event Event, reply, fromService, toService string) broker.Header {
 	return broker.Header{
-		FieldNameUID:         []string{conv.String(uid)},
+		FieldNameUID:         []string{strconv.FormatInt(uid, 10)},
 		FieldNameEvent:       []string{string(event)},
 		FieldNameReply:       []string{reply},
 		FieldNameFromService: []string{fromService},
@@ -36,7 +37,8 @@ func BuildHeader(uid int64, event Event, reply, fromService, toService string) b
 
 // GetUIDBy 从请求头中获取用户ID
 func GetUIDBy(header broker.Header) int64 {
-	return conv.Int64(header.Get(FieldNameUID))
+	uid, _ := strconv.ParseInt(header.Get(FieldNameUID), 10, 64)
+	return uid
 }
 
 // GetEventBy 从请求头中获取事件类型

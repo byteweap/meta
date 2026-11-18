@@ -190,38 +190,16 @@ func (m *Mesh) ReconnectHandler(handler func(uid int64)) {
 	m.reconnectHandler = handler
 }
 
-// RouteX 注册业务路由处理器(Gate pub-sub)
-// cmd/version 共同确定唯一路由
-// handler 支持两种写法，推荐直接传业务函数
-//
-// 1) 推荐写法
-// func(ctx *Context, req *Request)
-// 示例: mesh.RouteX(cmd, version, EnterGame)
-//
-// 2) 兼容写法
-// MessageHandler
-// 示例: mesh.RouteX(cmd, version, mesh.Wrap(EnterGame))
-//
-// 如果 handler 签名不合法，函数会 panic
-// 注意: 使用反射, 热点路由请使用 Route
-func (m *Mesh) RouteX(cmd, version uint32, handler any) {
-	mh, err := adaptMessageHandler(handler)
-	if err != nil {
-		panic(err)
-	}
-	key := routeKey(cmd, version)
-	m.routes.Store(key, mh)
-}
-
-// Route 注册业务路由处理器
-// 该方法要求显式传入 MessageHandler（通常通过 mesh.Wrap 构造）
-// 运行期不经过反射调用，适合高频热点路由
+// Route 注册客户端业务路由。handler 为 nil 或 cmd/version 已注册时 panic，原注册仍有效
+// Handle 和 Wrap 均支持类型化业务函数，运行期直接调用
 func (m *Mesh) Route(cmd, version uint32, handler MessageHandler) {
 	if handler == nil {
 		panic("mesh: handler is nil")
 	}
 	key := routeKey(cmd, version)
-	m.routes.Store(key, handler)
+	if _, loaded := m.routes.LoadOrStore(key, handler); loaded {
+		panic(fmt.Sprintf("mesh: duplicate client route cmd=%d version=%d", cmd, version))
+	}
 }
 
 // RPCRouteX 注册 request-reply 路由处理器
@@ -441,6 +419,10 @@ func (m *Mesh) handlerPubSubMessage(msg *broker.Message) {
 		cmd, version := header.GetCmd(), header.GetVersion()
 		if handler, ok := m.routes.Load(routeKey(cmd, version)); ok {
 			handler.(MessageHandler)(m, msg, e)
+		} else {
+			ctx := newContext(m, msg, e)
+			defer ctx.release()
+			ctx.ErrResp(http.StatusNotFound, "route not found")
 		}
 	}
 }

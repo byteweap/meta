@@ -12,8 +12,8 @@ import (
 
 type MessageHandler func(*Mesh, *broker.Message, *envelope.IMessage)
 
-// Wrap 路由处理函数包装器
-// 统一处理网关消息,处理系统事件,自动解析业务参数 payload
+// Wrap 将业务函数包装成网关消息的路由处理器
+// payload 非空时解码为 *T，省略或长度为 0 时向 handler 传入 nil
 func Wrap[T any](handler func(*Context, *T)) MessageHandler {
 	return func(m *Mesh, msg *broker.Message, e *envelope.IMessage) {
 		ctx := newContext(m, msg, e)
@@ -36,7 +36,7 @@ func Wrap[T any](handler func(*Context, *T)) MessageHandler {
 // 原理:
 // 1) 若本身就是 MessageHandler，直接返回
 // 2) 若是 func(*Context, *T)，使用反射校验签名后包装
-// 3) 包装函数内统一完成 envelope 解包、事件分发、payload 反序列化，再调用业务 handler
+// 3) 包装函数内解码非空 payload，再调用业务 handler
 func adaptMessageHandler(handler any) (MessageHandler, error) {
 	if handler == nil {
 		return nil, fmt.Errorf("mesh: handler is nil")

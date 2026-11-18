@@ -8,8 +8,6 @@ import (
 
 	"github.com/byteweap/meta/component/broker"
 	"github.com/byteweap/meta/component/log"
-	"github.com/byteweap/meta/encoding/proto"
-	"github.com/byteweap/meta/envelope"
 	"github.com/byteweap/meta/internal/cluster"
 	"github.com/byteweap/meta/pkg/async"
 	"github.com/byteweap/meta/pkg/conv"
@@ -70,32 +68,19 @@ func (g *Gate) replyError(reqMsg *broker.Message, code int, tip string) error {
 	return g.opts.broker.Reply(g.ctx, reqMsg, nil, broker.ReplyHeader(header))
 }
 
-// 业务消息分发至 mesh
-func (g *Gate) dispatch(uid int64, e *envelope.IMessage) {
-	if e == nil {
-		log.Errorf("[websocket] dispatch error, envelope is nil")
-		return
-	}
-	var (
-		toService = e.GetService()
-		loc, bro  = g.opts.locator, g.opts.broker
-	)
+// 将已校验的业务消息原样分发至 Mesh
+func (g *Gate) dispatch(uid int64, toService string, data []byte) {
 	if toService == "" {
 		log.Errorf("[websocket] dispatch error, uid: %v, service is empty", uid)
 		return
 	}
 
-	curNodeID, err := loc.Node(g.ctx, uid, toService)
+	curNodeID, err := g.opts.locator.Node(g.ctx, uid, toService)
 	if err != nil {
 		log.Errorf("[websocket] dispatch | get mesh node error, uid: %v, toService: %v, err: %v", uid, toService, err)
 		return
 	}
 
-	data, err := proto.Marshal(e)
-	if err != nil {
-		log.Errorf("[websocket] dispatch | marshal to mesh data error: %v", err)
-		return
-	}
 	nodeID := curNodeID
 	if curNodeID == "" {
 		sel, ensureErr := g.ensure(toService)
@@ -117,7 +102,7 @@ func (g *Gate) dispatch(uid int64, e *envelope.IMessage) {
 	)
 	// 发布消息到 Mesh
 	subject := cluster.Subject(g.opts.prefix, g.appName, toService, nodeID)
-	if err = bro.Pub(g.ctx, subject, data, broker.PubHeader(header)); err != nil {
+	if err := g.opts.broker.Pub(g.ctx, subject, data, broker.PubHeader(header)); err != nil {
 		log.Errorf("[websocket] dispatch error, uid: %v, subject: %v, err: %v", uid, subject, err)
 		return
 	}

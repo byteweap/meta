@@ -10,7 +10,7 @@ type Broker interface {
 	// ID 返回实现标识 (例如 "nats(core)")
 	ID() string
 
-	// Pub 发布一条消息 (fire-and-forget)
+	// Pub 发布一条消息 (fire-and-forget)。实现应将 data 视为只读
 	Pub(ctx context.Context, subject string, data []byte, opts ...PublishOption) error
 
 	// Sub 订阅主题。需要队列组 (Queue Group) 时请使用 SubscribeOption

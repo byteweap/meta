@@ -1,6 +1,7 @@
 package mesh
 
 import (
+	"net/http"
 	"sync"
 	"time"
 
@@ -189,6 +190,12 @@ func (c *Context) OkResp(args ...proto.Message) {
 
 // ErrResp 返回错误响应
 func (c *Context) ErrResp(code int, args ...string) {
+	wireCode := int32(code)
+	if code == 0 || int(wireCode) != code {
+		log.Errorf("[mesh].[ErrResponse] invalid error code: %d", code)
+		wireCode = http.StatusInternalServerError
+	}
+
 	tip := "mesh internal error"
 	if len(args) > 0 {
 		tip = args[0]
@@ -204,7 +211,7 @@ func (c *Context) ErrResp(code int, args ...string) {
 		Service: c.mesh.appName,
 		MsgType: envelope.MsgType_RESPONSE,
 		Result: &envelope.Code{
-			Code: int32(code),
+			Code: wireCode,
 			Tip:  tip,
 		},
 	}

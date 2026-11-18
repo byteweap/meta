@@ -28,6 +28,29 @@ func TestRouteFastWithWrap(t *testing.T) {
 	}
 }
 
+func TestBusinessEnvelopeRequiresHeader(t *testing.T) {
+	m := New()
+	calls := 0
+	m.Route(0, 0, func(*Mesh, *broker.Message, *envelope.IMessage) { calls++ })
+
+	msg := &broker.Message{}
+	m.handlerPubSubMessage(msg) // 空 protobuf 消息可以解码，但不包含 header
+	if calls != 0 {
+		t.Fatal("a missing header matched the zero route")
+	}
+
+	// 显式提供空 header 时，零值路由仍可正常使用
+	var err error
+	msg.Data, err = proto.Marshal(&envelope.IMessage{Header: &envelope.Header{}})
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+	m.handlerPubSubMessage(msg)
+	if calls != 1 {
+		t.Fatalf("zero route calls = %d, want 1", calls)
+	}
+}
+
 func TestRequestRouteFastWithWrapRequest(t *testing.T) {
 	mb := &mockBroker{}
 	m := New(Broker(mb))

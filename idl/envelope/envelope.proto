@@ -3,37 +3,43 @@ package envelope;
 option go_package = "github.com/byteweap/meta/envelope";
 
 message Header {
-  uint64 seq = 1;           // 序列(用户维度有序且唯一)
-  uint32 cmd = 2;           // 指令(路由)
-  uint32 version = 3;       // 版本
-  int64 timestamp = 4;      // 时间戳,ms
+  // 请求关联 ID。响应回填请求的值。0 表示无需关联，PUSH 使用 0
+  // 客户端为同一连接内尚未完成的请求分配不同的 ID，重连后可重用
+  uint64 seq = 1;
+  uint32 cmd = 2;      // 业务命令，与 version 共同标识服务内的路由
+  uint32 version = 3;  // cmd 对应的业务版本
+  // 发送方的 Unix 毫秒时间戳，0 表示未提供。客户端时钟不用于判断消息顺序
+  int64 timestamp = 4;
 }
 
-// 输入消息
-// client -> gate -> mesh
+// 上行消息（客户端 → Gate → Mesh）
 message IMessage {
-  Header header = 1;  // 头部信息
-  string service = 2; // 目标服务名，由业务层进行约束
-  bytes payload = 3;  // 业务消息体
+  Header header = 1;  // 必填
+  string service = 2; // 目标业务服务名，不能为空
+  // 业务 Protobuf 消息，类型由 (service, cmd, version) 对应的上行路由约定
+  // 省略或长度为 0 表示无业务消息体
+  bytes payload = 3;
 }
 
-// 输出消息
-// mesh -> gate -> client
+// 下行消息（Mesh → Gate → 客户端）
 message OMessage {
-  Header header = 1;      // 头部信息
-  string service = 2;     // 发送方的服务名，由业务层进行约束
-  MsgType msg_type = 3;   // 消息类型
-  Code result = 4;        // 消息结果
-  bytes payload = 5;      // 业务消息体
+  Header header = 1;    // 必填。RESPONSE 回填原请求的 seq、cmd、version
+  string service = 2;   // 来源业务服务名
+  MsgType msg_type = 3; // RESPONSE 或 PUSH
+  // RESPONSE 省略时表示成功，失败时携带非零错误码。PUSH 必须省略
+  Code result = 4;
+  // 业务 Protobuf 消息，类型由 (service, cmd, version, msg_type) 约定
+  // 省略或长度为 0 表示无业务消息体
+  bytes payload = 5;
 }
 
 enum MsgType {
-  UNKNOWN = 0;
-  RESPONSE = 1;  // 服务端响应, mesh -> gate -> client
-  PUSH = 2;      // 服务端主推, mesh -> gate -> client
+  UNKNOWN = 0;  // 缺省值，发送方不得使用
+  RESPONSE = 1; // 服务端响应
+  PUSH = 2;     // 服务端主动推送
 }
 
 message Code {
-  int32 code = 1; // 消息结果code, 0: 成功, 其它: 失败
-  string tip = 2; // 提示信息
+  int32 code = 1; // 非零错误码
+  string tip = 2; // 可选的错误提示
 }

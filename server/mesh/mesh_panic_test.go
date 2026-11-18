@@ -124,13 +124,13 @@ func TestMeshPanicRPCContinuesWithoutDuplicateReply(t *testing.T) {
 				bro.panicReplyFor = "failed.reply"
 			}
 			m := New(Locator(lifecycleLocator{}), Broker(bro))
-			m.RPCRoute("first", "v1", func(*Mesh, *broker.Message) ([]byte, string, int) {
+			m.RPCRoute("first", "v1", func(context.Context, *Mesh, *broker.Message) ([]byte, string, int) {
 				if !transportPanic {
 					panic("private handler panic detail")
 				}
 				return []byte("first"), "ok", http.StatusOK
 			})
-			m.RPCRoute("next", "v1", func(*Mesh, *broker.Message) ([]byte, string, int) {
+			m.RPCRoute("next", "v1", func(context.Context, *Mesh, *broker.Message) ([]byte, string, int) {
 				return []byte("next"), "ok", http.StatusOK
 			})
 			processed := make(chan struct{})

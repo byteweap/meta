@@ -2,12 +2,13 @@ package mesh
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"runtime/debug"
+	"strconv"
 	"sync"
+	"time"
 
 	"github.com/byteweap/meta"
 	"github.com/byteweap/meta/component/broker"
@@ -25,7 +26,6 @@ type Mesh struct {
 	ctx     context.Context
 	appID   string // application ID
 	appName string // application name
-	running bool
 	started bool
 	stopped bool
 	ready   chan struct{}
@@ -33,6 +33,9 @@ type Mesh struct {
 	opts          *options
 	routes        sync.Map // key: cmd<<32|version (uint64), value: MessageHandler
 	requestRoutes sync.Map // key: cmd.version (string), value: RPCMessageHandler
+
+	replyCtx    context.Context // 仅由消息循环使用
+	cancelReply context.CancelFunc
 
 	onlineHandler    func(uid int64) // 玩家上线
 	offlineHandler   func(uid int64) // 玩家掉线
@@ -53,7 +56,8 @@ func New(opts ...Option) *Mesh {
 	for _, opt := range opts {
 		opt(o)
 	}
-	return &Mesh{opts: o, ready: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Mesh{ctx: ctx, cancel: cancel, opts: o, ready: make(chan struct{})}
 }
 
 // Kind 返回服务类型
@@ -91,23 +95,26 @@ func (m *Mesh) Start(ctx context.Context) error {
 		return err
 	}
 	runCtx, cancel := context.WithCancel(ctx)
+	// 在启动前发出的 RPC 也随本次运行结束而取消
+	context.AfterFunc(runCtx, m.cancel)
 	m.ctx = runCtx
 	m.cancel = cancel
 	m.appID = app.ID()
 	m.appName = app.Name()
 	m.done = make(chan struct{})
-	m.running = true
 	m.started = true
 	m.mu.Unlock()
 
 	defer func() {
+		if m.cancelReply != nil {
+			m.cancelReply()
+		}
 		cancel()
 		m.mu.Lock()
 		if m.done != nil {
 			close(m.done)
 			m.done = nil
 		}
-		m.running = false
 		m.cancel = nil
 		m.mu.Unlock()
 	}()
@@ -120,10 +127,6 @@ func (m *Mesh) Start(ctx context.Context) error {
 func (m *Mesh) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	m.stopped = true
-	if !m.running {
-		m.mu.Unlock()
-		return nil
-	}
 	cancel := m.cancel
 	done := m.done
 	m.mu.Unlock()
@@ -287,29 +290,58 @@ func (m *Mesh) loop() error {
 	}
 }
 
-// Request 发送请求并等待回复
-// 入参
-//   - subject: 目标服务
-//   - cmd: 命令
-//   - version: 版本
-//   - data: 业务数据
-//
-// 出参
-//   - data: 业务数据
-//   - tip: 提示信息
-//   - code: 业务状态码
-//   - error: 错误信息
-func (m *Mesh) Request(subject, cmd, version string, data []byte) ([]byte, string, int, error) {
-	header := broker.Header{}
-	header.Set("cmd", cmd)
-	header.Set("version", version)
-	result, err := m.opts.broker.Request(m.ctx, subject, data, broker.RequestHeader(header))
+const (
+	rpcDeadlineHeader    = "deadline_unix_ms"
+	rpcMissingHeaderCode = 100
+	rpcReplyTimeout      = time.Second
+)
+
+// Request 向 subject 发送 RPC，返回响应数据、提示、业务状态码和传输错误
+// ctx 必须非 nil。调用方取消或 Mesh 停止时结束等待。有截止时间时将其按 Unix 毫秒传给下游
+// 主动取消只影响本地等待，已发出的业务可能继续执行。可在启动前调用，未配置 Broker 时返回 ErrBrokerRequired
+func (m *Mesh) Request(ctx context.Context, subject, cmd, version string, data []byte) ([]byte, string, int, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, "", 0, err
+	}
+	m.mu.Lock()
+	runCtx, stopped := m.ctx, m.stopped
+	m.mu.Unlock()
+	if stopped {
+		return nil, "", 0, context.Canceled
+	}
+	if err := runCtx.Err(); err != nil {
+		return nil, "", 0, err
+	}
+	if m.opts.broker == nil {
+		return nil, "", 0, es.ErrBrokerRequired
+	}
+
+	// 外部传入的上下文也要随本 Mesh 停止，使用同一取消信号时直接复用
+	if done := runCtx.Done(); done != nil && done != ctx.Done() {
+		var cancel context.CancelFunc
+		if limit, ok := runCtx.Deadline(); ok {
+			ctx, cancel = context.WithDeadline(ctx, limit)
+		} else {
+			ctx, cancel = context.WithCancel(ctx)
+		}
+		stop := context.AfterFunc(runCtx, func() {
+			// 到期由请求自身的截止时间处理，保留 DeadlineExceeded
+			if runCtx.Err() == context.Canceled {
+				cancel()
+			}
+		})
+		defer cancel()
+		defer stop()
+	}
+	header := broker.Header{"cmd": {cmd}, "version": {version}}
+	if deadline, ok := ctx.Deadline(); ok {
+		header.Set(rpcDeadlineHeader, strconv.FormatInt(deadline.UnixMilli(), 10))
+	}
+	result, err := m.opts.broker.Request(ctx, subject, data, broker.RequestHeader(header))
 	if err != nil {
 		return nil, "", 0, err
 	}
-	code := result.Header.Get("code")
-	tip := result.Header.Get("tip")
-	return result.Data, tip, conv.Int(code), nil
+	return result.Data, result.Header.Get("tip"), conv.Int(result.Header.Get("code")), nil
 }
 
 func (m *Mesh) sendResponse(subject, toService string, data []byte, uid int64, sessionID string) error {
@@ -321,79 +353,97 @@ func (m *Mesh) sendResponse(subject, toService string, data []byte, uid int64, s
 	return m.opts.broker.Pub(m.ctx, subject, data, broker.PubHeader(header))
 }
 
-// okReply 发送成功回复
-func (m *Mesh) okReply(reqMsg *broker.Message, data []byte) error {
-	if reqMsg == nil {
-		return nil
-	}
-	if reqMsg.Reply == "" {
-		return errors.New("reply subject is empty")
-	}
-	header := reqMsg.Header
-	if header == nil {
-		header = broker.Header{}
-	}
-	header.Set("code", "200")
-	header.Set("tip", "ok")
-	return m.opts.broker.Reply(m.ctx, reqMsg, data, broker.ReplyHeader(header))
-}
-
-// errReply 发送错误回复
-func (m *Mesh) errReply(reqMsg *broker.Message, code int, tip string) error {
-	if reqMsg == nil {
-		return errors.New("request message is nil")
-	}
-	if reqMsg.Reply == "" {
-		return errors.New("reply subject is empty")
-	}
-	header := reqMsg.Header
-	if header == nil {
-		header = broker.Header{}
-	}
-	header.Set("code", conv.String(code))
-	header.Set("tip", tip)
-	return m.opts.broker.Reply(m.ctx, reqMsg, nil, broker.ReplyHeader(header))
-}
-
 // handlerRequestReplyMessage 来自其它服务的(request-reply)消息
 func (m *Mesh) handlerRequestReplyMessage(msg *broker.Message) {
 	if msg == nil {
 		return
 	}
+	data, tip, code := m.dispatchRPC(msg)
+	m.replyRequestResult(msg, data, tip, code)
+}
+
+// dispatchRPC 在出队后校验绝对截止时间，收到请求之前的等待也计入调用预算
+func (m *Mesh) dispatchRPC(msg *broker.Message) ([]byte, string, int) {
 	header := msg.Header
 	if header == nil {
-		if err := m.errReply(msg, 100, "header is nil"); err != nil {
-			log.Errorf("mesh [handlerRequestReplyMessage] reply error: %v", err)
+		return nil, "header is nil", rpcMissingHeaderCode
+	}
+	ctx := m.ctx
+	if err := ctx.Err(); err != nil {
+		if err == context.DeadlineExceeded {
+			return nil, http.StatusText(http.StatusGatewayTimeout), http.StatusGatewayTimeout
 		}
-		return
+		return nil, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable
+	}
+	var deadline time.Time
+	if values, ok := header[rpcDeadlineHeader]; ok {
+		if len(values) != 1 {
+			return nil, "invalid RPC deadline", http.StatusBadRequest
+		}
+		ms, err := strconv.ParseInt(values[0], 10, 64)
+		if err != nil {
+			return nil, "invalid RPC deadline", http.StatusBadRequest
+		}
+		deadline = time.UnixMilli(ms)
+		if !time.Now().Before(deadline) {
+			return nil, http.StatusText(http.StatusGatewayTimeout), http.StatusGatewayTimeout
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
 	}
 	cmd, version := header.Get("cmd"), header.Get("version")
-	if handler, ok := m.requestRoutes.Load(requestRouteKey(cmd, version)); ok {
-		data, tip, code := m.invokeRPC(handler.(RPCMessageHandler), msg)
-		m.replyRequestResult(msg, data, tip, code)
-	} else {
-		if err := m.errReply(msg, 404, fmt.Sprintf("cmd:%s version:%s not found", cmd, version)); err != nil {
-			log.Errorf("mesh [handlerRequestReplyMessage] reply error: %v", err)
-		}
+	handler, ok := m.requestRoutes.Load(requestRouteKey(cmd, version))
+	if !ok {
+		return nil, fmt.Sprintf("cmd:%s version:%s not found", cmd, version), http.StatusNotFound
 	}
+	data, tip, code := m.invoke(ctx, handler.(RPCMessageHandler), msg)
+	if ctx.Err() == context.DeadlineExceeded || (!deadline.IsZero() && !time.Now().Before(deadline)) {
+		return nil, http.StatusText(http.StatusGatewayTimeout), http.StatusGatewayTimeout
+	}
+	return data, tip, code
 }
 
 func (m *Mesh) replyRequestResult(msg *broker.Message, data []byte, tip string, code int) {
-	if code == http.StatusOK {
-		if err := m.okReply(msg, data); err != nil {
-			log.Errorf("mesh request-reply ok reply error: %v", err)
-		}
+	if msg.Reply == "" {
+		log.Error("mesh request-reply: reply subject is empty")
 		return
 	}
-	if tip == "" {
-		tip = "request failed"
+	header := msg.Header
+	if header == nil {
+		header = broker.Header{}
 	}
-	if code == 0 {
-		code = http.StatusInternalServerError
+	if code == http.StatusOK {
+		header.Set("code", "200")
+		tip = "ok"
+	} else {
+		data = nil
+		if code == 0 {
+			code = http.StatusInternalServerError
+		}
+		header.Set("code", strconv.Itoa(code))
+		if tip == "" {
+			tip = "request failed"
+		}
 	}
-	if err := m.errReply(msg, code, tip); err != nil {
-		log.Errorf("mesh request-reply err reply error: %v", err)
+	header.Set("tip", tip)
+
+	if err := m.opts.broker.Reply(m.replyContext(), msg, data, broker.ReplyHeader(header)); err != nil {
+		log.Errorf("mesh request-reply error: %v", err)
 	}
+}
+
+// replyContext 为串行回包复用独立的发送期限，剩余时间不足一半时更换定时器
+func (m *Mesh) replyContext() context.Context {
+	if m.replyCtx != nil {
+		deadline, _ := m.replyCtx.Deadline()
+		if time.Until(deadline) >= rpcReplyTimeout/2 {
+			return m.replyCtx
+		}
+		m.cancelReply()
+	}
+	m.replyCtx, m.cancelReply = context.WithTimeout(context.WithoutCancel(m.ctx), rpcReplyTimeout)
+	return m.replyCtx
 }
 
 // handlerPubSubMessage 来自Gate的(pub-sub)消息

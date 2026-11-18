@@ -1,6 +1,7 @@
 package mesh
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -12,17 +13,18 @@ import (
 	"github.com/byteweap/meta/pkg/async"
 )
 
-type RPCMessageHandler func(*Mesh, *broker.Message) ([]byte, string, int)
+// RPCMessageHandler 处理服务间原始请求，ctx 携带本次请求的截止时间，返回值由 Mesh 统一回复
+type RPCMessageHandler func(context.Context, *Mesh, *broker.Message) ([]byte, string, int)
 
 const unmarshalPayloadError = "unmarshal payload error"
 
-// invokeRPC 只负责处理器调用，异常结果仍由调用方统一回复。
-func (m *Mesh) invokeRPC(handler RPCMessageHandler, msg *broker.Message) (data []byte, tip string, code int) {
+// invoke 将处理器的 panic 转为 500，交由调用方统一回包
+func (m *Mesh) invoke(ctx context.Context, handler RPCMessageHandler, msg *broker.Message) (data []byte, tip string, code int) {
 	defer async.Recover(func(r any) {
 		data, tip, code = nil, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError
 		log.Errorf("mesh RPC handler panic: %v\n%s", r, debug.Stack())
 	})
-	return handler(m, msg)
+	return handler(ctx, m, msg)
 }
 
 // WrapRPC 路由处理函数包装器
@@ -32,8 +34,8 @@ func (m *Mesh) invokeRPC(handler RPCMessageHandler, msg *broker.Message) (data [
 //   - string: 错误提示
 //   - int: 业务状态码(200表示成功, 其它表示失败)
 func WrapRPC[T any](handler func(*RPCContext, *T) ([]byte, string, int)) RPCMessageHandler {
-	return func(m *Mesh, msg *broker.Message) ([]byte, string, int) {
-		ctx := newRPCContext(m, msg)
+	return func(requestCtx context.Context, _ *Mesh, msg *broker.Message) ([]byte, string, int) {
+		ctx := newRPCContext(requestCtx, msg)
 		defer ctx.release()
 
 		if len(msg.Data) == 0 {
@@ -88,8 +90,8 @@ func adaptRPCMessageHandler(handler any) (RPCMessageHandler, error) {
 		return nil, fmt.Errorf("mesh: handler third return must be int, got %s", rt.Out(2).String())
 	}
 
-	return func(m *Mesh, msg *broker.Message) ([]byte, string, int) {
-		ctx := newRPCContext(m, msg)
+	return func(requestCtx context.Context, _ *Mesh, msg *broker.Message) ([]byte, string, int) {
+		ctx := newRPCContext(requestCtx, msg)
 		defer ctx.release()
 
 		callArg := reflect.Zero(argType)

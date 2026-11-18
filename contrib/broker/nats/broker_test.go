@@ -123,10 +123,11 @@ func TestRequestReply(t *testing.T) {
 		ping    = []byte("ping")
 		pong    = []byte("pong")
 	)
-	ctx := context.Background()
-	_, err = b.Sub(ctx, subject, func(msg *broker.Message) {
+	received := make(chan broker.Header, 1)
+	_, err = b.Sub(t.Context(), subject, func(msg *broker.Message) {
+		received <- msg.Header
 		// 使用 Reply 方法回复请求（更语义化）
-		_ = b.Reply(ctx, msg, pong, broker.ReplyHeader(broker.Header{
+		_ = b.Reply(t.Context(), msg, pong, broker.ReplyHeader(broker.Header{
 			"X-From": {"server"},
 		}))
 	})
@@ -135,14 +136,14 @@ func TestRequestReply(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
+	headers := broker.Header{"X-From": {"client"}, "deadline_unix_ms": {"1800000000123"}}
 	resp, err := b.Request(
 		ctx,
 		subject,
 		ping,
-		broker.RequestHeader(broker.Header{
-			"X-From": {"client"},
-		}))
+		broker.RequestHeader(headers))
 	require.NoError(t, err)
+	require.Equal(t, headers, <-received)
 	require.Equal(t, pong, resp.Data)
 	require.Equal(t, broker.Header{"X-From": {"server"}}, resp.Header)
 }
@@ -214,14 +215,11 @@ func TestReply(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, b.Close()) })
 
 	// 测试：正常 reply
-	var gotReply bool
-	ctx := context.Background()
-	_, err = b.Sub(context.Background(), "t.reply.v1", func(msg *broker.Message) {
-		err := b.Reply(ctx, msg, []byte("ok"), broker.ReplyHeader(broker.Header{
+	replyErr := make(chan error, 1)
+	_, err = b.Sub(t.Context(), "t.reply.v1", func(msg *broker.Message) {
+		replyErr <- b.Reply(t.Context(), msg, []byte("ok"), broker.ReplyHeader(broker.Header{
 			"X-Status": {"success"},
 		}))
-		require.NoError(t, err)
-		gotReply = true
 	})
 	require.NoError(t, err)
 
@@ -232,7 +230,7 @@ func TestReply(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []byte("ok"), resp.Data)
 	require.Equal(t, broker.Header{"X-Status": {"success"}}, resp.Header)
-	require.Eventually(t, func() bool { return gotReply }, 100*time.Millisecond, 10*time.Millisecond)
+	require.NoError(t, <-replyErr)
 
 	// 测试：msg.Reply 为空应该返回错误
 	msgWithoutReply := &broker.Message{Subject: "test", Reply: "", Data: []byte("x")}

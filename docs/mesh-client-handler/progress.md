@@ -7,7 +7,7 @@
 - [Handle](../../server/mesh/handle.go) 在注册时包装业务函数，复用现有 Wrap 的解码和上下文管理。自动回包只尝试一次，业务 panic 在调用处转为错误，发布 panic 由外层消息循环处理。
 - [客户端注册与分发](../../server/mesh/mesh.go) 统一使用 `Route`，注册时原子检查命令与版本冲突。已移除 `RouteX` 及其反射适配，调用方按 [README](../../README.md#业务路由) 迁移。旧代码若通过重复注册覆盖 handler，迁移时应保留最终需要的那次注册。
 - [回包编码](../../server/mesh/context.go) 共用原有路由信息和 envelope。请求上下文移除了未读取的事件字段，UID 编解码使用具体的十进制整数操作。
-- [game 示例](../../examples/game/internal/app.go) 的进入和退出游戏请求均使用类型化 handler，处理完成后回复空的成功响应。每请求 deadline 和服务间 RPC 调整留给后续工作。
+- [game 示例](../../examples/game/internal/app.go) 的进入和退出游戏请求均使用类型化 handler，处理完成后回复空的成功响应。后续的[服务间 RPC 截止时间](../mesh-rpc-deadline/progress.md)单独记录。客户端业务 handler 的 context 仍跟随 Mesh 生命周期。
 
 ## 验证
 

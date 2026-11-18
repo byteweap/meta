@@ -2,6 +2,7 @@ package mesh
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 
@@ -37,7 +38,7 @@ func TestAdaptRequestAutoWrapPayload(t *testing.T) {
 		t.Fatalf("marshal payload: %v", err)
 	}
 
-	gotData, gotTip, gotCode := h(m, &broker.Message{
+	gotData, gotTip, gotCode := h(t.Context(), m, &broker.Message{
 		Subject: "svc.game.request",
 		Reply:   "svc.game.reply",
 		Header: broker.Header{
@@ -74,7 +75,7 @@ func TestAdaptRequestAutoWrapEmptyPayloadPassNil(t *testing.T) {
 		return nil, "ok", 200
 	})
 
-	_, gotTip, gotCode := h(m, &broker.Message{Data: nil})
+	_, gotTip, gotCode := h(t.Context(), m, &broker.Message{Data: nil})
 	_ = gotTip
 	_ = gotCode
 	if gotReq != nil {
@@ -87,7 +88,7 @@ func TestAdaptRequestCompatibleWithRequestMessageHandler(t *testing.T) {
 	m := New()
 
 	called := false
-	h, err := adaptRPCMessageHandler(RPCMessageHandler(func(_ *Mesh, _ *broker.Message) ([]byte, string, int) {
+	h, err := adaptRPCMessageHandler(RPCMessageHandler(func(_ context.Context, _ *Mesh, _ *broker.Message) ([]byte, string, int) {
 		called = true
 		return nil, "ok", 200
 	}))
@@ -95,7 +96,7 @@ func TestAdaptRequestCompatibleWithRequestMessageHandler(t *testing.T) {
 		t.Fatalf("adapt request handler: %v", err)
 	}
 
-	_, gotTip, gotCode := h(m, &broker.Message{})
+	_, gotTip, gotCode := h(t.Context(), m, &broker.Message{})
 	_ = gotTip
 	_ = gotCode
 	if !called {

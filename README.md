@@ -202,7 +202,7 @@ func Hello(ctx *mesh.RPCContext, req *HelloReq) ([]byte, string, int) {
 }
 ```
 
-RPC 路由键为 `cmd.version`。`WrapRPC[T]` 会反序列化请求体并创建 `RPCContext`。返回值约定为：
+RPC 路由键为 `cmd.version`。`WrapRPC[T]` 会反序列化请求体并创建 `RPCContext`。handler 通过 `ctx.Context()` 获取标准上下文，传给数据库操作或下一次 `Mesh.Request` 即可沿用剩余时间。直接注册的 `RPCMessageHandler` 从首个参数接收标准上下文。返回值约定为：
 
 - `[]byte`：响应数据。
 - `string`：提示信息。
@@ -210,11 +210,17 @@ RPC 路由键为 `cmd.version`。`WrapRPC[T]` 会反序列化请求体并创建 
 
 RPC 业务处理器发生 panic 时，框架返回空数据、`500` 和通用提示 `Internal Server Error`，通过现有结果出口回复一次。回复传输本身发生 panic 时记录异常，不重复发送；后续消息仍继续处理。恢复不会撤销处理器已经完成的外部副作用。
 
-调用方使用：
+调用方为本次 RPC 设置截止时间。
 
 ```go
-data, tip, code, err := m.Request(subject, "hello", "v1", payload)
+ctx, cancel := context.WithTimeout(parent, 200*time.Millisecond)
+defer cancel()
+data, tip, code, err := m.Request(ctx, subject, "hello", "v1", payload)
 ```
+
+配置 Broker 后即可在 Mesh 启动前调用 `Request`。缺少 Broker 时返回 `errors.ErrBrokerRequired`。调用方取消或超时会结束本地等待并返回 Go 错误。主动取消只影响本地等待。跨节点传递绝对截止时间。Mesh 将有效期限以十进制 Unix 毫秒写入 Broker 请求头 `deadline_unix_ms`，向下取整到毫秒，节点时钟应保持同步。没有期限时省略该头，下游沿用自身的 Mesh 上下文。
+
+传输和排队时间计入期限。出队时已过期的请求跳过业务，执行期间到期则通过 `ctx.Done()` 通知 handler。框架在 handler 返回后统一回复，已过期的结果按 504 处理。若截止时间头格式错误或有多个值，Mesh 回复 400。已处理请求的回包使用独立的发送期限，Mesh 停止或到期后仍会尝试发送一次。
 
 ## 消息与集群协议
 

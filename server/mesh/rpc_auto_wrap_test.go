@@ -16,17 +16,17 @@ func TestAdaptRequestAutoWrapPayload(t *testing.T) {
 
 	called := false
 	var gotCtx *RPCContext
-	var gotReq *envelope.IMessage
+	var gotReq *envelope.ClientEnvelope
 
 	wantData := []byte("ok-data")
-	h := mustAdaptRequestHandler(t, func(ctx *RPCContext, req *envelope.IMessage) ([]byte, string, int) {
+	h := mustAdaptRequestHandler(t, func(ctx *RPCContext, req *envelope.ClientEnvelope) ([]byte, string, int) {
 		called = true
 		gotCtx = ctx
 		gotReq = req
 		return wantData, "ok", 200
 	})
 
-	raw, err := proto.Marshal(&envelope.IMessage{
+	raw, err := proto.Marshal(&envelope.ClientEnvelope{
 		Header: &envelope.Header{
 			Seq: 11,
 			Cmd: 88,
@@ -68,8 +68,8 @@ func TestAdaptRequestAutoWrapPayload(t *testing.T) {
 func TestAdaptRequestAutoWrapEmptyPayloadPassNil(t *testing.T) {
 	m := New()
 
-	var gotReq *envelope.IMessage
-	h := mustAdaptRequestHandler(t, func(_ *RPCContext, req *envelope.IMessage) ([]byte, string, int) {
+	var gotReq *envelope.ClientEnvelope
+	h := mustAdaptRequestHandler(t, func(_ *RPCContext, req *envelope.ClientEnvelope) ([]byte, string, int) {
 		gotReq = req
 		return nil, "ok", 200
 	})
@@ -130,17 +130,17 @@ func TestRequestRouteDispatchByHeader(t *testing.T) {
 
 	called := false
 	var gotCtx *RPCContext
-	var gotReq *envelope.IMessage
+	var gotReq *envelope.ClientEnvelope
 
 	wantData := []byte("route-ok")
-	m.RPCRouteX("2001", "1", func(ctx *RPCContext, req *envelope.IMessage) ([]byte, string, int) {
+	m.RPCRouteX("2001", "1", func(ctx *RPCContext, req *envelope.ClientEnvelope) ([]byte, string, int) {
 		called = true
 		gotCtx = ctx
 		gotReq = req
 		return wantData, "ok", 200
 	})
 
-	raw, err := proto.Marshal(&envelope.IMessage{
+	raw, err := proto.Marshal(&envelope.ClientEnvelope{
 		Header: &envelope.Header{
 			Seq: 21,
 			Cmd: 2001,
@@ -190,8 +190,8 @@ func TestRequestRouteDispatchEmptyPayloadPassNil(t *testing.T) {
 	mb := &mockBroker{}
 	m := New(Broker(mb))
 
-	var gotReq *envelope.IMessage
-	m.RPCRouteX("2002", "1", func(_ *RPCContext, req *envelope.IMessage) ([]byte, string, int) {
+	var gotReq *envelope.ClientEnvelope
+	m.RPCRouteX("2002", "1", func(_ *RPCContext, req *envelope.ClientEnvelope) ([]byte, string, int) {
 		gotReq = req
 		return nil, "ok", 200
 	})
@@ -214,7 +214,7 @@ func TestRequestRouteErrorReply(t *testing.T) {
 	mb := &mockBroker{}
 	m := New(Broker(mb))
 
-	m.RPCRouteX("2003", "1", func(_ *RPCContext, _ *envelope.IMessage) ([]byte, string, int) {
+	m.RPCRouteX("2003", "1", func(_ *RPCContext, _ *envelope.ClientEnvelope) ([]byte, string, int) {
 		return []byte("ignored"), "bad request", 400
 	})
 

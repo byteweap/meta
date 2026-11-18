@@ -25,7 +25,6 @@ func (g *Gate) handleRequestReplyMessage(msg *broker.Message) {
 
 // handlerPubSubMessage 来自Mesh服务的(pub-sub)消息
 func (g *Gate) handlePubSubMessage(msg *broker.Message) {
-	// 2. 直接回复给玩家的消息
 	uid := cluster.GetUIDBy(msg.Header)
 	if uid <= 0 {
 		log.Errorf("[websocket] reply2player get uid error, uid: %v", uid)
@@ -34,6 +33,30 @@ func (g *Gate) handlePubSubMessage(msg *broker.Message) {
 	session, ok := g.sessions.get(uid)
 	if !ok {
 		log.Errorf("[websocket] reply2player get session error, uid: %v", uid)
+		return
+	}
+	delivery := msg.Header.Get(cluster.FieldNameDelivery)
+	sessionID := cluster.GetSessionIDBy(msg.Header)
+	switch delivery {
+	case cluster.DeliveryResponse, "":
+		if g.opts.strictSessionDelivery && (delivery == "" || sessionID == "") {
+			log.Warnf("[websocket] missing response delivery metadata, uid: %v", uid)
+			return
+		}
+		if sessionID != "" {
+			currentID, _ := session.Get(cluster.FieldNameSessionID)
+			if currentID != sessionID {
+				log.Debugf("[websocket] dropping response to a stale session, uid: %v", uid)
+				return
+			}
+		}
+	case cluster.DeliveryPush:
+		if sessionID != "" {
+			log.Warnf("[websocket] push contains a session ID, uid: %v", uid)
+			return
+		}
+	default:
+		log.Warnf("[websocket] unknown delivery mode, uid: %v", uid)
 		return
 	}
 	if err := session.WriteBinary(msg.Data); err != nil {
@@ -69,7 +92,7 @@ func (g *Gate) replyError(reqMsg *broker.Message, code int, tip string) error {
 }
 
 // 将已校验的业务消息原样分发至 Mesh
-func (g *Gate) dispatch(uid int64, toService string, data []byte) {
+func (g *Gate) dispatch(uid int64, sessionID, toService string, data []byte) {
 	if toService == "" {
 		log.Errorf("[websocket] dispatch error, uid: %v, service is empty", uid)
 		return
@@ -100,6 +123,7 @@ func (g *Gate) dispatch(uid int64, toService string, data []byte) {
 		reply  = g.Subject(toService) // 回复主题
 		header = cluster.BuildHeader(uid, cluster.EventBusiness, reply, g.appName, toService)
 	)
+	header.Set(cluster.FieldNameSessionID, sessionID)
 	// 发布消息到 Mesh
 	subject := cluster.Subject(g.opts.prefix, g.appName, toService, nodeID)
 	if err := g.opts.broker.Pub(g.ctx, subject, data, broker.PubHeader(header)); err != nil {

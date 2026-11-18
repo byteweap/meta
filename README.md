@@ -108,30 +108,34 @@ WebSocket 握手前，Gate 调用显式配置的 `UserIDExtractor` 验证请求�
 
 Gate 和 Mesh 均要求 `locator.SessionLocator`。Redis 定位器的数据格式和状态事件直接更新，不提供历史兼容。跨网关以原子 Claim 的顺序确定归属；本步骤不提供跨网关强制踢线或可靠事件投递。事件校验与业务回调不构成跨系统事务；远端写入成功但响应丢失时，也无法保证失败请求未改变位置。
 
-客户端二进制消息会被解析为 `envelope.IMessage`：
+客户端二进制消息会被解析为 `envelope.ClientEnvelope`：
 
 ```proto
-message IMessage {
+message ClientEnvelope {
   Header header = 1;
   string service = 2;
   bytes payload = 3;
 }
 ```
 
-Gate 要求 `header` 存在、`service` 非空，根据 `IMessage.service` 查找目标业务服务：
+Gate 要求 `header` 存在、`service` 非空，根据 `ClientEnvelope.service` 查找目标业务服务：
 
 1. 先通过 `locator.Node(ctx, uid, service)` 查询玩家是否已经绑定到某个业务节点。
 2. 如果没有绑定，首次建立 `registry.Watch(service)` 后同步调用 `GetService` 初始化节点列表，再用 `selector.Selector` 选点；后续由监听更新。
-3. 使用 `cluster.BuildHeader` 写入 uid、事件类型、reply subject、来源服务和目标服务。
+3. 使用 `cluster.BuildHeader` 写入 uid、事件类型、reply subject、来源服务和目标服务，并从实际收到帧的连接带上 `session_id`。
 4. 将客户端的原始 Protobuf 字节发布到目标 subject：`<prefix>.<gateName>.<service>.<nodeID>`。
 
 同服务的并发请求共用一次发现初始化。空快照正常返回无可用节点，后续更新仍可恢复路由；初始化失败时释放资源，下一请求可重试。监听出错后清空旧节点并移除对应缓存，由后续请求重新建立发现任务。
 
 发现任务的关闭只执行一次，初始化与关闭都纳入 Gate.Stop 等待。旧监听关闭阻塞不会阻止新请求重建，关闭错误会保留在停止结果中。GetService 与 Watch 没有共同的版本协议，因此快照查询和后续通知之间不提供强一致保证。
 
-Mesh 回包到 Gate 后，Gate 根据 Broker 消息头中的 uid 找到本地 WebSocket session，并直接 `WriteBinary` 给客户端。
+Mesh 的 `OkResp` / `ErrResp` 在 Broker 头标记 `delivery=response`，并回填请求的 `session_id`。Gate 按 UID 找到本地连接；携带会话 ID 的响应只写入匹配的连接，重连后的新连接不接收旧响应。按 UID 投递给当前连接的推送标记为 `delivery=push`，不携带 `session_id`。Gate 仍原样写出下行字节，不解码 envelope。
 
-下行 `OMessage` 也必须包含 `header`，其 `service` 是来源服务。响应省略 `result` 表示成功，失败携带非零错误码，主动推送省略 `result`。请求关联和业务消息体的选型规则见 [外层协议定义](idl/envelope/envelope.proto)。
+滚动升级时默认允许缺少投递标记或会话 ID 的旧响应，此时仍存在旧回包误投风险。先升级 Gate 和 Mesh，迁移自定义发布者，再启用 `gate.StrictSessionDelivery(true)`：自定义响应必须同时设置 `delivery=response` 和原请求的 `session_id`，自定义推送必须设置 `delivery=push`。已有 Broker 适配器须保留这些头。该校验不撤销旧请求的业务操作，也不提供跨网关踢线。详见[迁移与回退](docs/session-reply-isolation/decision.md)。
+
+下行 `ServerEnvelope` 也必须包含 `header`，其 `service` 是来源服务，`kind` 区分 `RESPONSE` 和 `PUSH`。成功响应与推送均省略 `error`；失败响应携带 `error.code`（非零错误码），可附带 `error.message`。业务消息体的选型规则见 [外层协议定义](idl/envelope/envelope.proto)。
+
+`header.seq` 用于请求与响应关联，响应回填原值；`0` 表示无需关联。框架不要求它递增，也不据此排序或去重。`header.sent_at_unix_ms` 是发送方的 Unix 毫秒时间戳，`0` 表示未提供；框架响应填写 Mesh 发送方的时间，不回填客户端时间，也不使用客户端时钟判断消息顺序。
 
 ## Mesh 设计
 
@@ -216,7 +220,7 @@ data, tip, code, err := m.Request(subject, "hello", "v1", payload)
 
 框架把业务消息和集群路由信息分开：
 
-- `envelope.IMessage/OMessage`：客户端与业务层可感知的 protobuf envelope。
+- `envelope.ClientEnvelope` 封装上行请求，`envelope.ServerEnvelope` 封装下行响应或推送。
 - `broker.Header`：集群内部元数据，例如 uid、event、reply、fromService、toService。
 - `cluster.Subject`：broker subject 约定。
 
@@ -329,6 +333,10 @@ err := meta.New(
 - `examples/gate`
 - `examples/game`
 - `examples/gate-client`
+
+Go 客户端 `client/gate` 支持并发请求，按 `seq` 匹配响应，使用调用方的上下文取消等待；`Pushes()` 单独接收推送，消费不及且队列满时丢弃新推送。默认同进程重连继续使用递增序号；仅在所有 Gate 启用严格会话投递且回包方均已迁移后，才可用 `WithConnectionSequence()` 让每条连接从 1 开始。断开后由调用方重新连接并重新同步业务状态，客户端不自动重放请求。
+
+启动 Gate 和 game 示例后，在 `examples/gate-client` 运行 `go run ./cmd -url ws://127.0.0.1:<gate-port>/`，并配置与 Gate 相同的 `GATE_DEMO_TOKEN`。
 
 ## 工程扩展建议
 

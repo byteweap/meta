@@ -15,6 +15,7 @@ import (
 	"github.com/byteweap/meta/component/registry"
 	"github.com/byteweap/meta/component/selector"
 	"github.com/byteweap/meta/envelope"
+	"github.com/byteweap/meta/internal/cluster"
 )
 
 type initialDiscoveryRegistry struct {
@@ -107,8 +108,8 @@ func TestGateDiscoveryInitialDispatchWaitsForSnapshot(t *testing.T) {
 	bro := &testBroker{}
 	g := newInitialDiscoveryGate(t, reg, bro)
 	t.Cleanup(unblock)
-	session := &melody.Session{Keys: map[string]any{"uid": int64(42)}}
-	data, err := proto.Marshal(&envelope.IMessage{Service: "game", Header: &envelope.Header{Cmd: 1}})
+	session := &melody.Session{Keys: map[string]any{"uid": int64(42), cluster.FieldNameSessionID: "session-42"}}
+	data, err := proto.Marshal(&envelope.ClientEnvelope{Service: "game", Header: &envelope.Header{Cmd: 1}})
 	require.NoError(t, err)
 	finished := make(chan struct{})
 	go func() {

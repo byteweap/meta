@@ -55,6 +55,8 @@ func TestPublishSubscribe_HeaderRoundTrip(t *testing.T) {
 
 	h := broker.Header{
 		"X-Trace-Id": {"abc"},
+		"delivery":   {"response"},
+		"session_id": {"session-42"},
 	}
 	err = b.Pub(context.Background(), subject, data, broker.PubHeader(h))
 	require.NoError(t, err)

@@ -41,6 +41,7 @@ type options struct {
 	maxMessageSize             int64         // 最大消息大小
 	websocketMessageBufferSize int           // websocket 消息缓冲区大小
 	brokerMessageBufferSize    int           // broker 消息缓冲区大小
+	strictSessionDelivery      bool
 
 	// component
 	locator      locator.SessionLocator   // 玩家位置和会话归属
@@ -153,6 +154,14 @@ func BrokerMessageBufferSize(size int) Option {
 		if size > 0 {
 			o.brokerMessageBufferSize = size
 		}
+	}
+}
+
+// StrictSessionDelivery 要求 Broker 下行明确指定投递方式：响应绑定原会话，推送按 UID 投递
+// 默认关闭，以兼容滚动升级时尚未携带投递信息的旧发布者
+func StrictSessionDelivery(enabled bool) Option {
+	return func(o *options) {
+		o.strictSessionDelivery = enabled
 	}
 }
 

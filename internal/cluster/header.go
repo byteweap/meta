@@ -14,6 +14,15 @@ const (
 	FieldNameSessionID   = "session_id"
 )
 
+const (
+	// FieldNameDelivery 是 Gate 下行的投递方式头字段
+	FieldNameDelivery = "delivery"
+	// DeliveryResponse 表示绑定原连接的响应
+	DeliveryResponse = "response"
+	// DeliveryPush 表示只按 UID 投递给当前连接的推送
+	DeliveryPush = "push"
+)
+
 // BuildHeader 构建必备请求头
 func BuildHeader(uid int64, event Event, reply, fromService, toService string) broker.Header {
 	return broker.Header{
@@ -50,7 +59,7 @@ func GetToServiceBy(header broker.Header) string {
 	return header.Get(FieldNameToService)
 }
 
-// GetSessionIDBy 返回网关状态事件所属的会话标识。
+// GetSessionIDBy 返回网关会话标识。头部未提供时返回空字符串
 func GetSessionIDBy(header broker.Header) string {
 	return header.Get(FieldNameSessionID)
 }

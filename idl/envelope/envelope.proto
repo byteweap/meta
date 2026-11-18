@@ -8,12 +8,12 @@ message Header {
   uint64 seq = 1;
   uint32 cmd = 2;      // 业务命令，与 version 共同标识服务内的路由
   uint32 version = 3;  // cmd 对应的业务版本
-  // 发送方的 Unix 毫秒时间戳，0 表示未提供。客户端时钟不用于判断消息顺序
-  int64 timestamp = 4;
+  // 发送方发送消息时的 Unix 毫秒时间戳，0 表示未提供。客户端时钟不用于判断消息顺序
+  int64 sent_at_unix_ms = 4;
 }
 
-// 上行消息（客户端 → Gate → Mesh）
-message IMessage {
+// ClientEnvelope 封装客户端发往 Mesh 的上行消息，由 Gate 转发
+message ClientEnvelope {
   Header header = 1;  // 必填
   string service = 2; // 目标业务服务名，不能为空
   // 业务 Protobuf 消息，类型由 (service, cmd, version) 对应的上行路由约定
@@ -21,14 +21,14 @@ message IMessage {
   bytes payload = 3;
 }
 
-// 下行消息（Mesh → Gate → 客户端）
-message OMessage {
-  Header header = 1;    // 必填。RESPONSE 回填原请求的 seq、cmd、version
-  string service = 2;   // 来源业务服务名
-  MsgType msg_type = 3; // RESPONSE 或 PUSH
+// ServerEnvelope 封装 Mesh 发往客户端的响应或主动推送，由 Gate 转发
+message ServerEnvelope {
+  Header header = 1;  // 必填。RESPONSE 回填原请求的 seq、cmd、version
+  string service = 2; // 来源业务服务名
+  MsgType kind = 3;   // RESPONSE 或 PUSH
   // RESPONSE 省略时表示成功，失败时携带非零错误码。PUSH 必须省略
-  Code result = 4;
-  // 业务 Protobuf 消息，类型由 (service, cmd, version, msg_type) 约定
+  ResponseError error = 4;
+  // 业务 Protobuf 消息，类型由 (service, cmd, version, kind) 约定
   // 省略或长度为 0 表示无业务消息体
   bytes payload = 5;
 }
@@ -39,7 +39,8 @@ enum MsgType {
   PUSH = 2;     // 服务端主动推送
 }
 
-message Code {
-  int32 code = 1; // 非零错误码
-  string tip = 2; // 可选的错误提示
+// ResponseError 携带失败响应的错误码和可选说明
+message ResponseError {
+  int32 code = 1;      // 非零错误码
+  string message = 2;  // 可选的错误说明，空字符串表示未提供
 }

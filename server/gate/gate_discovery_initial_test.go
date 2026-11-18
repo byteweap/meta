@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/olahol/melody"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/byteweap/meta/component/registry"
 	"github.com/byteweap/meta/component/selector"
@@ -105,9 +107,12 @@ func TestGateDiscoveryInitialDispatchWaitsForSnapshot(t *testing.T) {
 	bro := &testBroker{}
 	g := newInitialDiscoveryGate(t, reg, bro)
 	t.Cleanup(unblock)
+	session := &melody.Session{Keys: map[string]any{"uid": int64(42)}}
+	data, err := proto.Marshal(&envelope.IMessage{Service: "game", Header: &envelope.Header{Cmd: 1}})
+	require.NoError(t, err)
 	finished := make(chan struct{})
 	go func() {
-		g.dispatch(42, &envelope.IMessage{Service: "game", Header: &envelope.Header{Cmd: 1}})
+		g.handleBinaryMessage(session, data)
 		close(finished)
 	}()
 	awaitBackground(t, entered)

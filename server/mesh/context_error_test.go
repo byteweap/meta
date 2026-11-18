@@ -2,6 +2,8 @@ package mesh
 
 import (
 	"context"
+	"math"
+	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -67,6 +69,51 @@ func TestContextErrRespPublishesExpectedTip(t *testing.T) {
 			require.Equal(t, uint64(7), out.GetHeader().GetSeq())
 			require.Equal(t, uint32(1001), out.GetHeader().GetCmd())
 			require.Equal(t, uint32(2), out.GetHeader().GetVersion())
+		})
+	}
+}
+
+func TestContextResponseStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		success bool
+		code    int64
+	}{
+		{name: "success", success: true},
+		{name: "zero error code"},
+		{name: "above int32", code: math.MaxInt32 + 1},
+		{name: "below int32", code: math.MinInt32 - 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code := int(tc.code)
+			if int64(code) != tc.code {
+				t.Skip("error code cannot be passed as int on this platform")
+			}
+			bro := &errorResponseBroker{}
+			m := New(Broker(bro))
+			m.ctx = context.Background()
+			m.appName = "game"
+			c := newContext(m, &broker.Message{
+				Header: cluster.BuildHeader(42, cluster.EventBusiness, "meta.game.gate.gate-1", "gate", "game"),
+			}, &envelope.IMessage{Header: &envelope.Header{Seq: 7, Cmd: 1001, Version: 2}})
+			defer c.release()
+
+			if tc.success {
+				c.OkResp()
+			} else {
+				c.ErrResp(code)
+			}
+
+			require.Len(t, bro.messages, 1)
+			var out envelope.OMessage
+			require.NoError(t, proto.Unmarshal(bro.messages[0].Data, &out))
+			require.NotNil(t, out.GetHeader())
+			require.Equal(t, envelope.MsgType_RESPONSE, out.GetMsgType())
+			if tc.success {
+				require.Nil(t, out.GetResult())
+				return
+			}
+			require.Equal(t, int32(http.StatusInternalServerError), out.GetResult().GetCode())
 		})
 	}
 }

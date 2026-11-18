@@ -94,9 +94,13 @@ func (g *Gate) handleTextMessage(_ *melody.Session, _ []byte) {
 
 // 接收到二进制消息时调用
 func (g *Gate) handleBinaryMessage(s *melody.Session, msg []byte) {
-	meta := &envelope.IMessage{}
-	if err := proto.Unmarshal(msg, meta); err != nil {
+	var incoming envelope.IMessage
+	if err := proto.Unmarshal(msg, &incoming); err != nil {
 		log.Errorf("[websocket] unmarshal envelope error: %v", err)
+		return
+	}
+	if incoming.GetHeader() == nil {
+		log.Error("[websocket] envelope header is required")
 		return
 	}
 	uids, ok := s.Get("uid")
@@ -106,8 +110,8 @@ func (g *Gate) handleBinaryMessage(s *melody.Session, msg []byte) {
 	}
 	uid := uids.(int64)
 
-	// 业务消息分发
-	g.dispatch(uid, meta)
+	// 校验后直接发布 WebSocket 本次读取的字节
+	g.dispatch(uid, incoming.GetService(), msg)
 }
 
 // 错误时调用

@@ -118,18 +118,20 @@ message IMessage {
 }
 ```
 
-Gate 根据 `IMessage.service` 查找目标业务服务：
+Gate 要求 `header` 存在、`service` 非空，根据 `IMessage.service` 查找目标业务服务：
 
 1. 先通过 `locator.Node(ctx, uid, service)` 查询玩家是否已经绑定到某个业务节点。
 2. 如果没有绑定，首次建立 `registry.Watch(service)` 后同步调用 `GetService` 初始化节点列表，再用 `selector.Selector` 选点；后续由监听更新。
 3. 使用 `cluster.BuildHeader` 写入 uid、事件类型、reply subject、来源服务和目标服务。
-4. 发布到目标 subject：`<prefix>.<gateName>.<service>.<nodeID>`。
+4. 将客户端的原始 Protobuf 字节发布到目标 subject：`<prefix>.<gateName>.<service>.<nodeID>`。
 
 同服务的并发请求共用一次发现初始化。空快照正常返回无可用节点，后续更新仍可恢复路由；初始化失败时释放资源，下一请求可重试。监听出错后清空旧节点并移除对应缓存，由后续请求重新建立发现任务。
 
 发现任务的关闭只执行一次，初始化与关闭都纳入 Gate.Stop 等待。旧监听关闭阻塞不会阻止新请求重建，关闭错误会保留在停止结果中。GetService 与 Watch 没有共同的版本协议，因此快照查询和后续通知之间不提供强一致保证。
 
-Mesh 回包到 Gate 后，Gate 根据 header 中的 uid 找到本地 WebSocket session，并直接 `WriteBinary` 给客户端。
+Mesh 回包到 Gate 后，Gate 根据 Broker 消息头中的 uid 找到本地 WebSocket session，并直接 `WriteBinary` 给客户端。
+
+下行 `OMessage` 也必须包含 `header`，其 `service` 是来源服务。响应省略 `result` 表示成功，失败携带非零错误码，主动推送省略 `result`。请求关联和业务消息体的选型规则见 [外层协议定义](idl/envelope/envelope.proto)。
 
 ## Mesh 设计
 
@@ -150,7 +152,7 @@ Gate/Mesh 在每条 broker 消息的处理入口恢复 panic，记录异常及�
 
 ### 业务路由
 
-客户端业务消息由 `cmd/version` 共同定位处理器。底层路由键使用 `uint64(cmd)<<32 | uint64(version)`，避免字符串拼接开销。
+Mesh 校验客户端业务消息包含 `header`，再按 `header.cmd` 和 `header.version` 定位处理器。底层路由键使用 `uint64(cmd)<<32 | uint64(version)`，避免字符串拼接开销。
 
 Mesh 支持两类注册方式：
 
@@ -166,10 +168,8 @@ m.Route(1, 1, mesh.Wrap(EnterGame))
 
 `mesh.Wrap[T]` 会统一完成：
 
-- 从 `envelope.IMessage` 读取 header、service 和 payload。
-- 反序列化 protobuf payload 到 `*T`。
-- 从对象池获取 `mesh.Context`，减少高频消息分配。
-- 调用业务 handler。
+- 从对象池获取 `mesh.Context`，用 Broker 消息头和 envelope 的 `header` 初始化。
+- 解码非空的 Protobuf `payload` 到 `*T`，再调用业务 handler。省略 `payload` 或长度为 0 时传入 `nil`。
 - handler 返回后释放 context 到 `sync.Pool`。
 
 `mesh.Context` 提供当前消息的 `UID/Seq/Cmd/Version/Subject/Timestamp/FromService/ToService`，并提供 `OkResp` 和 `ErrResp` 回包方法。若需要在新 goroutine 中使用上下文，应调用 `ctx.Copy()`，因为原始 context 会在 handler 结束后归还对象池。

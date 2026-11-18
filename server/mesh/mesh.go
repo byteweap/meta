@@ -437,6 +437,10 @@ func (m *Mesh) handlerPubSubMessage(msg *broker.Message) {
 			return
 		}
 		header := e.GetHeader()
+		if header == nil {
+			log.Error("mesh Gate2MeshEnvelope header is required")
+			return
+		}
 		cmd, version := header.GetCmd(), header.GetVersion()
 		if handler, ok := m.routes.Load(routeKey(cmd, version)); ok {
 			handler.(MessageHandler)(m, msg, e)

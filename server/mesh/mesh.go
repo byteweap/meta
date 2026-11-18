@@ -73,7 +73,7 @@ func (*Mesh) Kind() server.Kind {
 // Ready 返回本次启动的就绪信号。
 func (m *Mesh) Ready() <-chan struct{} { return m.ready }
 
-// Start 启动 Mesh 服务。RPC 并发配置无效，或前缀、服务名、实例 ID 含 Broker 通配符时返回错误
+// Start 启动 Mesh 服务。Gate 服务名或 RPC 并发配置无效，或前缀、服务名、实例 ID 含 Broker 通配符时返回错误
 func (m *Mesh) Start(ctx context.Context) error {
 	app, ok := meta.FromContext(ctx)
 	if !ok {
@@ -85,6 +85,9 @@ func (m *Mesh) Start(ctx context.Context) error {
 	}
 	if m.opts.locator == nil {
 		return es.ErrLocatorRequired
+	}
+	if !validSubjectToken(m.opts.gateService) {
+		return fmt.Errorf("invalid Gate service name: %q", m.opts.gateService)
 	}
 	workers, queueSize := m.opts.rpcWorkers, m.opts.rpcQueueSize
 	if workers < 0 || queueSize < 0 || (workers == 0 && queueSize != 0) || queueSize > math.MaxInt-workers {
@@ -359,23 +362,8 @@ func (m *Mesh) Request(ctx context.Context, subject, cmd, version string, data [
 		return nil, "", 0, es.ErrBrokerRequired
 	}
 
-	// 外部传入的上下文也要随本 Mesh 停止，使用同一取消信号时直接复用
-	if done := runCtx.Done(); done != nil && done != ctx.Done() {
-		var cancel context.CancelFunc
-		if limit, ok := runCtx.Deadline(); ok {
-			ctx, cancel = context.WithDeadline(ctx, limit)
-		} else {
-			ctx, cancel = context.WithCancel(ctx)
-		}
-		stop := context.AfterFunc(runCtx, func() {
-			// 到期由请求自身的截止时间处理，保留 DeadlineExceeded
-			if runCtx.Err() == context.Canceled {
-				cancel()
-			}
-		})
-		defer cancel()
-		defer stop()
-	}
+	ctx, cleanup := outboundContext(ctx, runCtx)
+	defer cleanup.release()
 	header := broker.Header{"cmd": {cmd}, "version": {version}}
 	if deadline, ok := ctx.Deadline(); ok {
 		if time.Until(deadline) <= 0 {
@@ -388,6 +376,38 @@ func (m *Mesh) Request(ctx context.Context, subject, cmd, version string, data [
 		return nil, "", 0, err
 	}
 	return result.Data, result.Header.Get("tip"), conv.Int(result.Header.Get("code")), nil
+}
+
+type outboundCleanup struct {
+	cancel context.CancelFunc
+	stop   func() bool
+}
+
+func (c outboundCleanup) release() {
+	if c.stop != nil {
+		c.stop()
+		c.cancel()
+	}
+}
+
+// outboundContext 让出站操作同时遵循调用方和 Mesh 的期限与取消信号
+func outboundContext(ctx, runCtx context.Context) (context.Context, outboundCleanup) {
+	if done := runCtx.Done(); done == nil || done == ctx.Done() {
+		return ctx, outboundCleanup{}
+	}
+	var cancel context.CancelFunc
+	if deadline, ok := runCtx.Deadline(); ok {
+		ctx, cancel = context.WithDeadline(ctx, deadline)
+	} else {
+		ctx, cancel = context.WithCancel(ctx)
+	}
+	stop := context.AfterFunc(runCtx, func() {
+		// 到期由出站上下文自身的期限处理，保留 DeadlineExceeded
+		if runCtx.Err() == context.Canceled {
+			cancel()
+		}
+	})
+	return ctx, outboundCleanup{cancel: cancel, stop: stop}
 }
 
 func (m *Mesh) sendResponse(subject, toService string, data []byte, uid int64, sessionID string) error {

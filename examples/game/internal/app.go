@@ -15,7 +15,7 @@ func New() (*server.Server, func(), error) {
 
 	loc := redis.New(goredis.UniversalOptions{
 		Addrs: []string{"localhost:6379"},
-	}, "game")
+	}, "meta")
 
 	bro, err := nats.New(
 		nats.URLs("nats://localhost:4222"),

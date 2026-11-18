@@ -18,6 +18,7 @@ type options struct {
 	messageBufferSize int    // 消息缓冲区大小
 	rpcWorkers        int
 	rpcQueueSize      int
+	gateService       string
 	locator           locator.SessionLocator // 玩家位置与会话定位器
 	broker            broker.Broker          // 消息传输代理
 	discovery         registry.Registry
@@ -31,6 +32,7 @@ type Option func(*options)
 func defaultOptions() *options {
 	return &options{
 		prefix:            defaultPrefix,
+		gateService:       "gate",
 		messageBufferSize: defaultMessageBufferSize,
 	}
 }
@@ -61,6 +63,12 @@ func RPCConcurrency(workers, queueSize int) Option {
 	return func(o *options) {
 		o.rpcWorkers, o.rpcQueueSize = workers, queueSize
 	}
+}
+
+// GateService 设置 Push 定位会话使用的 Gate 服务名，默认为 gate
+// 名称须与 Gate 的应用名一致，空名称或非法的 Broker 主题段会使 Start 返回错误
+func GateService(name string) Option {
+	return func(o *options) { o.gateService = name }
 }
 
 // Locator 设置玩家位置定位器

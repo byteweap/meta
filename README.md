@@ -190,6 +190,21 @@ m.ReconnectHandler(func(uid int64) {})
 
 这些事件使用 broker header 中的 `event` 字段区分，不走业务 `cmd/version` 路由。
 
+### 按 UID 主动推送
+
+Mesh 就绪后，可以向指定 UID 发送业务 Protobuf 消息。下面的 `notice` 是业务消息，命令号为 20，版本为 1。传入 `nil` 可以发送空消息体。
+
+```go
+err := m.Push(ctx, uid, 20, 1, notice)
+```
+
+Mesh 用 UID 和 Gate 的逻辑服务名查询当前会话。默认服务名为 `gate`，自定义名称可在创建 Mesh 时设置 `mesh.GateService("edge")`，对应 Gate 的 `meta.Name("edge")`。Gate 与 Mesh 需要使用同一会话存储和键前缀。
+
+- 用户没有在线会话时，可用 `errors.Is(err, mesh.ErrUserOffline)` 判断。定位、编码和 Broker 发布错误返回给调用方。
+- 定位或编码耗尽调用预算时，Mesh 跳过发布。调用方主动取消会通知定位器和 Broker，已进入的网络 I/O 何时返回取决于适配器。
+- 返回 `nil` 表示 Broker 适配器接受了发布。使用 NATS 时，此刻消息可能仍在发送缓冲区。客户端收到的 `PUSH` 帧通过 `Pushes()` 分发，`seq` 为 0，来源为 Mesh 服务名。
+- 推送按 UID 投递给目标 Gate 的本地连接。若用户在定位后迁往另一个 Gate，本次推送可能丢失，也可能被仍存在的旧连接收到。下一次推送会重新定位。
+
 ### 服务间 RPC
 
 Mesh 还提供 request-reply 能力：

@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,6 +32,47 @@ func assertSession(t *testing.T, l *Locator, uid int64, service string, want loc
 	got, err := l.Session(context.Background(), uid, service)
 	if err != nil || got != want {
 		t.Fatalf("Session = %+v, %v; want %+v", got, err, want)
+	}
+}
+
+// sessionDeadlineConn 记录 HMGET 是否给实际的网络连接设置了调用方期限
+type sessionDeadlineConn struct {
+	net.Conn
+	want time.Time
+	seen *atomic.Bool
+}
+
+func (c *sessionDeadlineConn) SetReadDeadline(deadline time.Time) error {
+	if deadline.Equal(c.want) {
+		c.seen.Store(true)
+	}
+	return c.Conn.SetReadDeadline(deadline)
+}
+
+func TestSessionUsesCallerDeadline(t *testing.T) {
+	server := miniredis.RunT(t)
+	deadline := time.Now().Add(10 * time.Second)
+	var seen atomic.Bool
+	l := New(goredis.UniversalOptions{
+		Addrs: []string{server.Addr()}, ReadTimeout: time.Minute,
+		Dialer: func(ctx context.Context, network, address string) (net.Conn, error) {
+			var dialer net.Dialer
+			conn, err := dialer.DialContext(ctx, network, address)
+			if err != nil {
+				return nil, err
+			}
+			return &sessionDeadlineConn{Conn: conn, want: deadline, seen: &seen}, nil
+		},
+	}, "test")
+	t.Cleanup(func() { _ = l.Close() })
+	assertSession(t, l, 7, "gate", locator.Session{})
+	ctx, cancel := context.WithDeadline(t.Context(), deadline)
+	defer cancel()
+	if _, err := l.Session(ctx, 7, "gate"); err != nil {
+		t.Fatal(err)
+	}
+	if !seen.Load() {
+		t.Fatal("HMGET did not apply the caller's deadline to its socket read")
 	}
 }
 

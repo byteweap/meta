@@ -54,9 +54,10 @@ end
 return 0
 `)
 
-// New 使用 Redis 客户端配置创建 Redis 定位器
+// New 创建从主节点读取的 Redis 定位器。启用套接字期限时，网络读写取调用方与配置中较早的截止时间
 func New(opts redis.UniversalOptions, prefix string) *Locator {
-	// 会话归属必须从主节点读取，避免副本延迟让已失效的会话事件通过校验。
+	opts.ContextTimeoutEnabled = true
+	// 会话归属必须从主节点读取，避免副本延迟让已失效的会话事件通过校验
 	opts.ReadOnly = false
 	opts.RouteByLatency = false
 	opts.RouteRandomly = false

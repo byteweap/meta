@@ -22,3 +22,13 @@
 命名变更通过了根模块测试。将旧 IDL 的两处类型名替换为新名后，生成的描述符与当前描述符逐字节一致。
 
 移除别名后，确认 Go 和 Proto 源码已无旧类型名。Mesh 测试、Gate 定向回归和 21 个模块的 `make check` 通过。
+
+## 2026-11-18 字段命名与验证
+
+| 验收项 | 实施与证据 |
+|---|---|
+| AC-05 | [IDL](../../idl/envelope/envelope.proto) 将发送时间命名为 `sent_at_unix_ms`。[响应回归](../../server/mesh/context_error_test.go) 验证 `Context.Timestamp()` 仍读取客户端时间，成功与失败响应均使用 Mesh 当前时间。 |
+| AC-06 | 下行改用 `kind`、`error` 和 `ResponseError.code/message`。[响应回归](../../server/mesh/context_error_test.go) 验证成功省略错误，错误码和说明照常传递，零和越界错误码仍回传 500。 |
+| AC-07 | `seq`、`cmd`、`version`、上行结构和实际路由行为不变。[README](../../README.md) 明确框架不以 `seq` 排序或去重。严格业务顺序由状态归属方处理，不从请求关联号或发送时间推断；重连续传和跨连接迟到回包隔离不在本次范围内。 |
+
+使用 `protoc-gen-go v1.36.11` 执行 `make envelope`。在临时副本中还原当前 IDL 的五处改名后，生成的 Protobuf 描述符与基线逐字节一致。Gate/Mesh 定向测试、根模块 `go test -mod=readonly ./...`、`make check`（21 个模块）和 `examples/game` 模块测试均通过。未验证外部客户端或生产 Broker；依赖生成 API、反射、`Any` 类型 URL 或 ProtoJSON 键的调用方需迁移。

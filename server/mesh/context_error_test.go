@@ -5,6 +5,7 @@ import (
 	"math"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -28,12 +29,12 @@ func (b *errorResponseBroker) Pub(_ context.Context, subject string, data []byte
 	return nil
 }
 
-func TestContextErrRespPublishesExpectedTip(t *testing.T) {
+func TestContextErrRespPublishesExpectedMessage(t *testing.T) {
 	const code = 4321
 	for _, tc := range []struct {
-		name string
-		call func(*Context)
-		tip  string
+		name    string
+		call    func(*Context)
+		message string
 	}{
 		{"omitted", func(c *Context) { c.ErrResp(code) }, "mesh internal error"},
 		{"nil slice", func(c *Context) { c.ErrResp(code, []string(nil)...) }, "mesh internal error"},
@@ -47,12 +48,15 @@ func TestContextErrRespPublishesExpectedTip(t *testing.T) {
 			m := New(Broker(bro))
 			m.ctx = context.Background()
 			m.appName = "game"
+			header := cluster.BuildHeader(42, cluster.EventBusiness, "meta.game.gate.gate-1", "gate", "game")
+			header.Set(cluster.FieldNameSessionID, "session-42")
 			c := newContext(m, &broker.Message{
-				Header: cluster.BuildHeader(42, cluster.EventBusiness, "meta.game.gate.gate-1", "gate", "game"),
+				Header: header,
 			}, &envelope.ClientEnvelope{Header: &envelope.Header{Seq: 7, Cmd: 1001, Version: 2}})
-			defer c.release()
+			copied := c.Copy()
+			c.release()
 
-			tc.call(c)
+			tc.call(copied)
 
 			require.Len(t, bro.messages, 1)
 			msg := bro.messages[0]
@@ -60,11 +64,13 @@ func TestContextErrRespPublishesExpectedTip(t *testing.T) {
 			require.Equal(t, int64(42), cluster.GetUIDBy(msg.Header))
 			require.Equal(t, "game", cluster.GetFromServiceBy(msg.Header))
 			require.Equal(t, "gate", cluster.GetToServiceBy(msg.Header))
+			require.Equal(t, "session-42", cluster.GetSessionIDBy(msg.Header))
+			require.Equal(t, cluster.DeliveryResponse, msg.Header.Get(cluster.FieldNameDelivery))
 			out := &envelope.ServerEnvelope{}
 			require.NoError(t, proto.Unmarshal(msg.Data, out))
-			require.Equal(t, int32(code), out.GetResult().GetCode())
-			require.Equal(t, tc.tip, out.GetResult().GetTip())
-			require.Equal(t, envelope.MsgType_RESPONSE, out.GetMsgType())
+			require.Equal(t, int32(code), out.GetError().GetCode())
+			require.Equal(t, tc.message, out.GetError().GetMessage())
+			require.Equal(t, envelope.MsgType_RESPONSE, out.GetKind())
 			require.Equal(t, "game", out.GetService())
 			require.Equal(t, uint64(7), out.GetHeader().GetSeq())
 			require.Equal(t, uint32(1001), out.GetHeader().GetCmd())
@@ -74,12 +80,15 @@ func TestContextErrRespPublishesExpectedTip(t *testing.T) {
 }
 
 func TestContextResponseStatus(t *testing.T) {
+	const requestSentAtUnixMs int64 = 1700000000000
 	for _, tc := range []struct {
 		name    string
 		success bool
 		code    int64
+		session string
 	}{
-		{name: "success", success: true},
+		{name: "success", success: true, session: "session-42"},
+		{name: "success via old Gate", success: true},
 		{name: "zero error code"},
 		{name: "above int32", code: math.MaxInt32 + 1},
 		{name: "below int32", code: math.MinInt32 - 1},
@@ -93,10 +102,15 @@ func TestContextResponseStatus(t *testing.T) {
 			m := New(Broker(bro))
 			m.ctx = context.Background()
 			m.appName = "game"
+			header := cluster.BuildHeader(42, cluster.EventBusiness, "meta.game.gate.gate-1", "gate", "game")
+			if tc.session != "" {
+				header.Set(cluster.FieldNameSessionID, tc.session)
+			}
 			c := newContext(m, &broker.Message{
-				Header: cluster.BuildHeader(42, cluster.EventBusiness, "meta.game.gate.gate-1", "gate", "game"),
-			}, &envelope.ClientEnvelope{Header: &envelope.Header{Seq: 7, Cmd: 1001, Version: 2}})
+				Header: header,
+			}, &envelope.ClientEnvelope{Header: &envelope.Header{Seq: 7, Cmd: 1001, Version: 2, SentAtUnixMs: requestSentAtUnixMs}})
 			defer c.release()
+			require.Equal(t, requestSentAtUnixMs, c.Timestamp())
 
 			if tc.success {
 				c.OkResp()
@@ -105,15 +119,18 @@ func TestContextResponseStatus(t *testing.T) {
 			}
 
 			require.Len(t, bro.messages, 1)
+			require.Equal(t, tc.session, cluster.GetSessionIDBy(bro.messages[0].Header))
+			require.Equal(t, cluster.DeliveryResponse, bro.messages[0].Header.Get(cluster.FieldNameDelivery))
 			var out envelope.ServerEnvelope
 			require.NoError(t, proto.Unmarshal(bro.messages[0].Data, &out))
 			require.NotNil(t, out.GetHeader())
-			require.Equal(t, envelope.MsgType_RESPONSE, out.GetMsgType())
+			require.Equal(t, envelope.MsgType_RESPONSE, out.GetKind())
+			require.WithinDuration(t, time.Now(), time.UnixMilli(out.GetHeader().GetSentAtUnixMs()), time.Minute)
 			if tc.success {
-				require.Nil(t, out.GetResult())
+				require.Nil(t, out.GetError())
 				return
 			}
-			require.Equal(t, int32(http.StatusInternalServerError), out.GetResult().GetCode())
+			require.Equal(t, int32(http.StatusInternalServerError), out.GetError().GetCode())
 		})
 	}
 }

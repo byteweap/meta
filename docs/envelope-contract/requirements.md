@@ -20,3 +20,13 @@
 用户指出 `IMessage` 和 `OMessage` 无法直观体现方向。本次选用 `ClientEnvelope` 表示客户端上行，`ServerEnvelope` 表示服务端响应和推送。IDL、Go 调用方及当前文档统一采用新名称，字段和枚举保持原有线包格式。
 
 用户确认无需兼容旧类型名。Go 调用方、Protobuf 反射查找和 `Any` 类型 URL 统一使用新名称。
+
+## 2026-11-18 字段命名
+
+| 验收项 | 要求 |
+|---|---|
+| AC-05 | `Header.sent_at_unix_ms` 表示发送方的 Unix 毫秒时间，保留字段 #4、`int64`、零值表示未提供的约定以及 Mesh 给响应填入当前时间的行为。 |
+| AC-06 | 下行使用 `kind` 和 `error`，错误类型为 `ResponseError`，内部字段为 `code` 和 `message`。保留原字段编号、类型结构、枚举值和成功省略错误的规则。 |
+| AC-07 | 保留 `seq`、`cmd`、`version` 和 `ClientEnvelope.header`。本次仅分析 `seq` 在业务有序性上的用途，不引入单调校验、排队、重放或重连处理变更。 |
+
+普通 Protobuf 二进制帧保持兼容；生成的字段和类型名、反射名以及默认 ProtoJSON 键随 IDL 改名。已有调用方需要按新名称迁移。

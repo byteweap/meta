@@ -23,7 +23,7 @@ type Reason string
 const (
 	// Unavailable 表示 Gate 无法选定目标或向目标发布消息
 	Unavailable Reason = "unavailable"
-	// QueueFull 表示 Mesh 的 RPC 执行与排队名额已经用尽
+	// QueueFull 表示 Mesh 的串行客户端队列或 RPC 执行与排队名额已经用尽
 	QueueFull Reason = "queue_full"
 	// DeadlineExceeded 表示 Mesh 判定 RPC 执行预算已耗尽
 	DeadlineExceeded Reason = "deadline_exceeded"

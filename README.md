@@ -184,6 +184,12 @@ m.Route(1, 1, mesh.Handle(EnterGame))
 
 旧版 `m.RouteX(cmd, version, fn)` 已移除。若 `fn` 的签名为 `func(*mesh.Context, *T)`，将注册语句替换为 `m.Route(cmd, version, mesh.Wrap(fn))`；若已持有 `mesh.MessageHandler`，直接使用 `m.Route(cmd, version, fn)`。同一个命令和版本重复注册会在注册处 panic。
 
+### 客户端请求过载保护
+
+默认客户端请求等待串行队列空出位置。通过 `mesh.ClientOverloadRejection(true)` 启用满队列快速拒绝，队列容量由 `mesh.MessageBufferSize` 设置。成功入队的消息按原顺序执行，会话事件和 RPC 沿用各自的准入规则。
+
+满队列时记录一次 `QueueFull`。可解析的请求若携带 UID、原会话 ID 和回复地址，Mesh 尝试一次绑定原会话的 `503` 响应，回填原 `seq/cmd/version`。拒绝回包的上下文期限最多 100 毫秒，开始排空时取消。Broker 决定在途发布何时响应取消。
+
 ### 系统事件
 
 Gate 会把用户状态变化广播给玩家已经绑定的业务服务节点。Mesh 内置三个事件钩子：
@@ -335,7 +341,7 @@ Meta 的核心组件都以接口形式存在：
 | `Handler` | Mesh 执行已注册的业务处理器。客户端处理器内同步发送的回包也计入这个阶段 |
 | `Reply` | Mesh 向 Broker 提交客户端响应或 RPC 回包，止于 Broker 调用返回 |
 
-拒绝原因包括 Gate 选点或转发失败（`Unavailable`）、Mesh 的 RPC 执行与排队名额用尽（`QueueFull`）、Mesh 判定 RPC 截止时间已到（`DeadlineExceeded`），以及停服期间拒收或丢弃尚未执行的请求（`Stopping`）。计数以框架决策为准。会话事件、主动推送和出站 RPC 不参与观测。
+拒绝原因包括 Gate 选点或转发失败（`Unavailable`）、Mesh 客户端队列或 RPC 执行与排队名额用尽（`QueueFull`）、Mesh 判定 RPC 截止时间已到（`DeadlineExceeded`），以及停服期间拒收或丢弃尚未执行的请求（`Stopping`）。计数以框架决策为准。会话事件、主动推送和出站 RPC 不参与观测。
 
 ## 快速示例
 

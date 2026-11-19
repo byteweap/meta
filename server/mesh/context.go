@@ -1,6 +1,7 @@
 package mesh
 
 import (
+	"context"
 	"net/http"
 	"sync"
 	"time"
@@ -158,6 +159,10 @@ func (c *Context) respond(payload []byte, failure *envelope.ResponseError) {
 		log.Error("mesh response: reply subject is empty")
 		return
 	}
+	c.respondWithContext(c.mesh.ctx, payload, failure)
+}
+
+func (c *Context) respondWithContext(ctx context.Context, payload []byte, failure *envelope.ResponseError) {
 	out := &envelope.ServerEnvelope{
 		Header: &envelope.Header{
 			Seq: c.seq, Cmd: c.cmd, Version: c.version,
@@ -173,7 +178,7 @@ func (c *Context) respond(payload []byte, failure *envelope.ResponseError) {
 		log.Errorf("mesh marshal response: %v", err)
 		return
 	}
-	if err := c.mesh.sendResponse(c.reply, c.fromService, data, c.uid, c.sessionID); err != nil {
+	if err := c.mesh.sendResponse(ctx, c.reply, c.fromService, data, c.uid, c.sessionID); err != nil {
 		log.Errorf("mesh publish response to %s: %v", c.reply, err)
 	}
 }

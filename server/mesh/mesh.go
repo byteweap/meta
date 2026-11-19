@@ -282,6 +282,7 @@ func (m *Mesh) loop(inputCtx context.Context, pool *rpcPool) error {
 	)
 
 	var inputMu sync.RWMutex
+	var rejects sync.WaitGroup
 	// 取消先唤醒阻塞的投递，再等待在途投递退到锁外，确保可以关闭队列
 	closeInput := context.AfterFunc(inputCtx, func() {
 		inputMu.Lock()
@@ -289,7 +290,7 @@ func (m *Mesh) loop(inputCtx context.Context, pool *rpcPool) error {
 		inputMu.Unlock()
 	})
 	defer closeInput()
-	if o.observer != nil {
+	if o.observer != nil || o.clientOverload {
 		defer func() {
 			// 订阅可能在返回前投递，启动失败时也要关闭输入并清点队列
 			m.stopInput()
@@ -298,6 +299,7 @@ func (m *Mesh) loop(inputCtx context.Context, pool *rpcPool) error {
 					o.observer.Reject(observe.Stopping)
 				}
 			}
+			rejects.Wait()
 		}()
 	}
 	receive := func(msg *broker.Message) {
@@ -313,6 +315,31 @@ func (m *Mesh) loop(inputCtx context.Context, pool *rpcPool) error {
 		inputMu.RUnlock()
 		if o.observer != nil && isRequest(msg) {
 			o.observer.Reject(observe.Stopping)
+		}
+	}
+	if o.clientOverload {
+		blockingReceive := receive
+		receive = func(msg *broker.Message) {
+			if msg == nil || msg.Reply != "" || !isRequest(msg) {
+				blockingReceive(msg)
+				return
+			}
+			inputMu.RLock()
+			if inputCtx.Err() != nil {
+				inputMu.RUnlock()
+				m.reject(observe.Stopping)
+				return
+			}
+			select {
+			case msgChan <- m.queued(msg):
+				inputMu.RUnlock()
+			default:
+				// 关闭准入和队列后再等待，确保不会与 Wait 并发新增回包
+				rejects.Add(1)
+				inputMu.RUnlock()
+				defer rejects.Done()
+				m.rejectClientRequest(inputCtx, msg)
+			}
 		}
 	}
 	if pool != nil {
@@ -436,8 +463,11 @@ func outboundContext(ctx, runCtx context.Context) (context.Context, outboundClea
 	return ctx, outboundCleanup{cancel: cancel, stop: stop}
 }
 
-func (m *Mesh) sendResponse(subject, toService string, data []byte, uid int64, sessionID string) error {
+func (m *Mesh) sendResponse(ctx context.Context, subject, toService string, data []byte, uid int64, sessionID string) error {
 	if err := m.drainErr(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	header := cluster.BuildHeader(uid, cluster.EventBusiness, "", m.appName, toService)
@@ -450,7 +480,7 @@ func (m *Mesh) sendResponse(subject, toService string, data []byte, uid int64, s
 		start := time.Now()
 		defer func() { observer.Observe(observe.Reply, time.Since(start)) }()
 	}
-	return m.opts.broker.Pub(m.ctx, subject, data, opt)
+	return m.opts.broker.Pub(ctx, subject, data, opt)
 }
 
 func (m *Mesh) handleRPC(msg *broker.Message, replies *rpcReplyTimer) {

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/byteweap/meta"
@@ -45,15 +46,23 @@ type Mesh struct {
 	offlineHandler   func(uid int64) // 玩家掉线
 	reconnectHandler func(uid int64) // 玩家重连
 
-	cancel  context.CancelFunc
-	done    chan struct{}
-	mu      sync.Mutex
-	stopErr error
+	cancel       context.CancelFunc
+	stopInput    context.CancelFunc
+	replyCtx     context.Context
+	cancelReply  context.CancelFunc
+	drain        atomic.Pointer[drainBudget]
+	releaseDrain func()
+	done         chan struct{}
+	mu           sync.Mutex
+	stopErr      error
 }
 
 const meshScheme = "mesh"
 
-var _ server.Server = (*Mesh)(nil)
+var (
+	_ server.Server  = (*Mesh)(nil)
+	_ server.Drainer = (*Mesh)(nil)
+)
 
 // New 创建 Mesh 服务实例
 func New(opts ...Option) *Mesh {
@@ -113,10 +122,15 @@ func (m *Mesh) Start(ctx context.Context) error {
 		return fmt.Errorf("wildcard in mesh address: prefix=%q service=%q id=%q", m.opts.prefix, name, id)
 	}
 	runCtx, cancel := context.WithCancel(ctx)
+	inputCtx, stopInput := context.WithCancel(runCtx)
+	replyCtx, cancelReply := context.WithCancel(context.WithoutCancel(runCtx))
 	// 在启动前发出的 RPC 也随本次运行结束而取消
 	context.AfterFunc(runCtx, m.cancel)
 	m.ctx = runCtx
 	m.cancel = cancel
+	m.stopInput = stopInput
+	m.replyCtx = replyCtx
+	m.cancelReply = cancelReply
 	m.appID = id
 	m.appName = name
 	if m.opts.discovery != nil && m.opts.selectorFunc != nil {
@@ -131,12 +145,9 @@ func (m *Mesh) Start(ctx context.Context) error {
 	m.started = true
 	m.mu.Unlock()
 
-	var pool *rpcPool
 	defer func() {
 		cancel()
-		if pool != nil {
-			pool.close()
-		}
+		cancelReply()
 		m.replies.stop()
 		var closeErr error
 		if m.resolver != nil {
@@ -149,42 +160,24 @@ func (m *Mesh) Start(ctx context.Context) error {
 			m.done = nil
 		}
 		m.cancel = nil
+		if m.releaseDrain != nil {
+			m.releaseDrain()
+		}
 		m.mu.Unlock()
 	}()
 
+	var pool *rpcPool
 	if workers > 0 {
 		pool = newRPCPool(m, workers+queueSize)
 	}
-	return m.loop(pool)
-}
-
-// Stop 停止 Mesh 服务，在 ctx 的期限内等待清理，并返回服务发现监听器的关闭错误
-func (m *Mesh) Stop(ctx context.Context) error {
-	m.mu.Lock()
-	m.stopped = true
-	cancel := m.cancel
-	done := m.done
-	closeErr := m.stopErr
-	m.mu.Unlock()
-
-	if cancel != nil {
+	err := m.loop(inputCtx, pool)
+	if err != nil {
 		cancel()
 	}
-	if done == nil {
-		return closeErr
+	if pool != nil {
+		pool.close()
 	}
-	select {
-	case <-done:
-		// 关闭 done 前已经写入最终结果，Mesh 实例只启动一次
-		if m.stopErr != nil {
-			return m.stopErr
-		}
-		log.Infof("%s.%s server stop success", m.appName, m.appID)
-		return nil
-	case <-ctx.Done():
-		log.Warnf("%s.%s server stop timeout", m.appName, m.appID)
-		return ctx.Err()
-	}
+	return err
 }
 
 // Endpoint 返回服务监听地址
@@ -280,23 +273,36 @@ func (m *Mesh) RPCRoute(cmd, version string, handler RPCMessageHandler) {
 }
 
 // loop 循环
-func (m *Mesh) loop(pool *rpcPool) error {
+func (m *Mesh) loop(inputCtx context.Context, pool *rpcPool) error {
 	var (
 		o       = m.opts
 		subject = cluster.Subject(o.prefix, "*", m.appName, m.appID)
 		msgChan = make(chan *broker.Message, o.messageBufferSize)
 	)
 
+	var inputMu sync.RWMutex
+	// 取消先唤醒阻塞的投递，再等待在途投递退到锁外，确保可以关闭队列
+	closeInput := context.AfterFunc(inputCtx, func() {
+		inputMu.Lock()
+		close(msgChan)
+		inputMu.Unlock()
+	})
+	defer closeInput()
 	receive := func(msg *broker.Message) {
+		inputMu.RLock()
+		defer inputMu.RUnlock()
+		if inputCtx.Err() != nil {
+			return
+		}
 		select {
 		case msgChan <- msg:
-		case <-m.ctx.Done():
+		case <-inputCtx.Done():
 		}
 	}
 	if pool != nil {
-		receive = pool.receiver(receive)
+		receive = pool.receiver(inputCtx, receive)
 	}
-	sub, err := o.broker.Sub(m.ctx, subject, receive)
+	sub, err := o.broker.Sub(inputCtx, subject, receive)
 	if err != nil {
 		return err
 	}
@@ -323,17 +329,15 @@ func (m *Mesh) loop(pool *rpcPool) error {
 
 	log.Infof("%s.%s server start success", m.appName, m.appID)
 
-	for {
-		select {
-		case <-m.ctx.Done():
+	for msg := range msgChan {
+		if m.ctx.Err() != nil || m.drainErr() != nil {
 			return nil
-		case msg := <-msgChan:
-			if msg == nil {
-				continue
-			}
+		}
+		if msg != nil {
 			m.handlerMessage(msg)
 		}
 	}
+	return nil
 }
 
 const (
@@ -343,18 +347,15 @@ const (
 )
 
 // Request 向 subject 发送 RPC，返回响应数据、提示、业务状态码和传输错误
-// ctx 必须非 nil。调用方取消或 Mesh 停止时结束等待。有截止时间时将其按 Unix 毫秒传给下游
+// ctx 必须非 nil。调用方取消或 Mesh 执行上下文结束时停止等待。有截止时间时将其按 Unix 毫秒传给下游
 // 主动取消只影响本地等待，已发出的业务可能继续执行。可在启动前调用，未配置 Broker 时返回 ErrBrokerRequired
 func (m *Mesh) Request(ctx context.Context, subject, cmd, version string, data []byte) ([]byte, string, int, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, "", 0, err
 	}
 	m.mu.Lock()
-	runCtx, stopped := m.ctx, m.stopped
+	runCtx := m.ctx
 	m.mu.Unlock()
-	if stopped {
-		return nil, "", 0, context.Canceled
-	}
 	if err := runCtx.Err(); err != nil {
 		return nil, "", 0, err
 	}
@@ -411,6 +412,9 @@ func outboundContext(ctx, runCtx context.Context) (context.Context, outboundClea
 }
 
 func (m *Mesh) sendResponse(subject, toService string, data []byte, uid int64, sessionID string) error {
+	if err := m.drainErr(); err != nil {
+		return err
+	}
 	header := cluster.BuildHeader(uid, cluster.EventBusiness, "", m.appName, toService)
 	header.Set(cluster.FieldNameDelivery, cluster.DeliveryResponse)
 	if sessionID != "" {
@@ -452,6 +456,9 @@ func (m *Mesh) dispatchRPC(msg *broker.Message) ([]byte, string, int) {
 		}
 		return nil, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable
 	}
+	if m.drainErr() != nil {
+		return nil, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable
+	}
 	if !deadline.IsZero() {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithDeadline(ctx, deadline)
@@ -472,6 +479,13 @@ func (m *Mesh) dispatchRPC(msg *broker.Message) ([]byte, string, int) {
 func (m *Mesh) replyRequestResult(replies *rpcReplyTimer, msg *broker.Message, data []byte, tip string, code int) {
 	if msg.Reply == "" {
 		log.Error("mesh request-reply: reply subject is empty")
+		return
+	}
+	replyCtx := m.replyCtx
+	if replyCtx == nil {
+		replyCtx = context.WithoutCancel(m.ctx)
+	}
+	if replyCtx.Err() != nil || m.drainErr() != nil {
 		return
 	}
 	header := msg.Header
@@ -496,7 +510,7 @@ func (m *Mesh) replyRequestResult(replies *rpcReplyTimer, msg *broker.Message, d
 	}
 	header.Set("tip", tip)
 
-	if err := m.opts.broker.Reply(replies.context(m.ctx), msg, data, broker.ReplyHeader(header)); err != nil {
+	if err := m.opts.broker.Reply(replies.context(replyCtx), msg, data, broker.ReplyHeader(header)); err != nil {
 		log.Errorf("mesh request-reply error: %v", err)
 	}
 }

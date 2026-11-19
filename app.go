@@ -9,6 +9,7 @@ import (
 
 	"github.com/byteweap/meta/component/log"
 	"github.com/byteweap/meta/component/registry"
+	"github.com/byteweap/meta/server"
 )
 
 type AppInfo interface {
@@ -84,6 +85,10 @@ func (a *App) Run() (err error) {
 		defer stopSignals()
 		ctx = signalCtx
 	}
+	workCtx, cancelWork := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancelWork()
+	stopStartup := context.AfterFunc(ctx, cancelWork)
+	defer stopStartup()
 	results := make(chan error, len(a.opts.servers))
 	started, registered := 0, false
 	defer func() {
@@ -114,13 +119,17 @@ func (a *App) Run() (err error) {
 		if ctx.Err() != nil {
 			return nil
 		}
+		srvCtx := ctx
+		if _, ok := srv.(server.Drainer); ok {
+			srvCtx = workCtx
+		}
 		started++
 		go func() {
 			if ctx.Err() != nil {
 				results <- nil
 				return
 			}
-			startErr := srv.Start(ctx)
+			startErr := srv.Start(srvCtx)
 			if startErr == context.Canceled && ctx.Err() != nil {
 				startErr = nil
 			} else if startErr == nil && ctx.Err() == nil {
@@ -140,6 +149,8 @@ func (a *App) Run() (err error) {
 	if ctx.Err() != nil {
 		return nil
 	}
+	// 全部服务就绪后，排空服务由清理阶段结束执行上下文
+	stopStartup()
 	if err := a.register(ctx); err != nil {
 		return err
 	}
@@ -164,6 +175,11 @@ func (a *App) Stop() error {
 
 func (a *App) cleanup(ctx context.Context, registered bool, results <-chan error, started int) error {
 	var err error
+	for _, srv := range a.opts.servers {
+		if drainer, ok := srv.(server.Drainer); ok {
+			drainer.BeginDrain(ctx)
+		}
+	}
 	for _, fn := range a.opts.preStopHooks {
 		err = errors.Join(err, fn(ctx))
 	}

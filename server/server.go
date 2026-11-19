@@ -22,3 +22,11 @@ type Server interface {
 	Stop(ctx context.Context) error
 	Endpoint(ctx context.Context) (*url.URL, error)
 }
+
+// Drainer 由支持排空的服务实现。App 在停止钩子和注销前调用 BeginDrain
+// 应用就绪后，App 保留这类服务的 Start 上下文供已接纳的工作执行，并在清理结束后取消
+type Drainer interface {
+	// BeginDrain 停止接纳新请求，允许已接纳的工作在 ctx 的期限内完成
+	// 方法立即返回。Stop 负责等待清理结果，重复调用不改变既有排空期限
+	BeginDrain(ctx context.Context)
+}

@@ -17,6 +17,7 @@ import (
 	"github.com/byteweap/meta"
 	"github.com/byteweap/meta/component/broker"
 	"github.com/byteweap/meta/component/log"
+	"github.com/byteweap/meta/component/observe"
 	"github.com/byteweap/meta/encoding/proto"
 	"github.com/byteweap/meta/envelope"
 	es "github.com/byteweap/meta/errors"
@@ -277,7 +278,7 @@ func (m *Mesh) loop(inputCtx context.Context, pool *rpcPool) error {
 	var (
 		o       = m.opts
 		subject = cluster.Subject(o.prefix, "*", m.appName, m.appID)
-		msgChan = make(chan *broker.Message, o.messageBufferSize)
+		msgChan = make(chan queuedMessage, o.messageBufferSize)
 	)
 
 	var inputMu sync.RWMutex
@@ -288,15 +289,30 @@ func (m *Mesh) loop(inputCtx context.Context, pool *rpcPool) error {
 		inputMu.Unlock()
 	})
 	defer closeInput()
+	if o.observer != nil {
+		defer func() {
+			// 订阅可能在返回前投递，启动失败时也要关闭输入并清点队列
+			m.stopInput()
+			for q := range msgChan {
+				if !q.at.IsZero() {
+					o.observer.Reject(observe.Stopping)
+				}
+			}
+		}()
+	}
 	receive := func(msg *broker.Message) {
 		inputMu.RLock()
-		defer inputMu.RUnlock()
-		if inputCtx.Err() != nil {
-			return
+		if inputCtx.Err() == nil {
+			select {
+			case msgChan <- m.queued(msg):
+				inputMu.RUnlock()
+				return
+			case <-inputCtx.Done():
+			}
 		}
-		select {
-		case msgChan <- msg:
-		case <-inputCtx.Done():
+		inputMu.RUnlock()
+		if o.observer != nil && isRequest(msg) {
+			o.observer.Reject(observe.Stopping)
 		}
 	}
 	if pool != nil {
@@ -329,12 +345,21 @@ func (m *Mesh) loop(inputCtx context.Context, pool *rpcPool) error {
 
 	log.Infof("%s.%s server start success", m.appName, m.appID)
 
-	for msg := range msgChan {
-		if m.ctx.Err() != nil || m.drainErr() != nil {
+	for q := range msgChan {
+		running := m.ctx.Err() == nil && m.drainErr() == nil
+		if running && !q.at.IsZero() {
+			o.observer.Observe(observe.Queue, time.Since(q.at))
+			// 观测回调执行期间可能耗尽排空预算
+			running = m.ctx.Err() == nil && m.drainErr() == nil
+		}
+		if !running {
+			if !q.at.IsZero() {
+				o.observer.Reject(observe.Stopping)
+			}
 			return nil
 		}
-		if msg != nil {
-			m.handlerMessage(msg)
+		if q.msg != nil {
+			m.handlerMessage(q.msg)
 		}
 	}
 	return nil
@@ -420,7 +445,12 @@ func (m *Mesh) sendResponse(subject, toService string, data []byte, uid int64, s
 	if sessionID != "" {
 		header.Set(cluster.FieldNameSessionID, sessionID)
 	}
-	return m.opts.broker.Pub(m.ctx, subject, data, broker.PubHeader(header))
+	opt := broker.PubHeader(header)
+	if observer := m.opts.observer; observer != nil {
+		start := time.Now()
+		defer func() { observer.Observe(observe.Reply, time.Since(start)) }()
+	}
+	return m.opts.broker.Pub(m.ctx, subject, data, opt)
 }
 
 func (m *Mesh) handleRPC(msg *broker.Message, replies *rpcReplyTimer) {
@@ -446,17 +476,21 @@ func (m *Mesh) dispatchRPC(msg *broker.Message) ([]byte, string, int) {
 		}
 		deadline = time.UnixMilli(ms)
 		if !time.Now().Before(deadline) {
+			m.reject(observe.DeadlineExceeded)
 			return nil, http.StatusText(http.StatusGatewayTimeout), http.StatusGatewayTimeout
 		}
 	}
 	ctx := m.ctx
 	if err := ctx.Err(); err != nil {
 		if err == context.DeadlineExceeded {
+			m.reject(observe.DeadlineExceeded)
 			return nil, http.StatusText(http.StatusGatewayTimeout), http.StatusGatewayTimeout
 		}
+		m.reject(observe.Stopping)
 		return nil, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable
 	}
 	if m.drainErr() != nil {
+		m.reject(observe.Stopping)
 		return nil, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable
 	}
 	if !deadline.IsZero() {
@@ -469,8 +503,18 @@ func (m *Mesh) dispatchRPC(msg *broker.Message) ([]byte, string, int) {
 	if !ok {
 		return nil, fmt.Sprintf("cmd:%s version:%s not found", cmd, version), http.StatusNotFound
 	}
+	observer := m.opts.observer
+	var start time.Time
+	if observer != nil {
+		start = time.Now()
+	}
 	data, tip, code := m.invoke(ctx, handler.(RPCMessageHandler), msg)
-	if ctx.Err() == context.DeadlineExceeded || (!deadline.IsZero() && !time.Now().Before(deadline)) {
+	expired := ctx.Err() == context.DeadlineExceeded || (!deadline.IsZero() && !time.Now().Before(deadline))
+	if observer != nil {
+		observer.Observe(observe.Handler, time.Since(start))
+	}
+	if expired {
+		m.reject(observe.DeadlineExceeded)
 		return nil, http.StatusText(http.StatusGatewayTimeout), http.StatusGatewayTimeout
 	}
 	return data, tip, code
@@ -510,7 +554,17 @@ func (m *Mesh) replyRequestResult(replies *rpcReplyTimer, msg *broker.Message, d
 	}
 	header.Set("tip", tip)
 
-	if err := m.opts.broker.Reply(replies.context(replyCtx), msg, data, broker.ReplyHeader(header)); err != nil {
+	ctx, opt := replies.context(replyCtx), broker.ReplyHeader(header)
+	observer := m.opts.observer
+	var start time.Time
+	if observer != nil {
+		start = time.Now()
+	}
+	err := m.opts.broker.Reply(ctx, msg, data, opt)
+	if observer != nil {
+		observer.Observe(observe.Reply, time.Since(start))
+	}
+	if err != nil {
 		log.Errorf("mesh request-reply error: %v", err)
 	}
 }
@@ -537,6 +591,10 @@ func (m *Mesh) handlerPubSubMessage(msg *broker.Message) {
 		}
 		cmd, version := header.GetCmd(), header.GetVersion()
 		if handler, ok := m.routes.Load(routeKey(cmd, version)); ok {
+			if observer := m.opts.observer; observer != nil {
+				start := time.Now()
+				defer func() { observer.Observe(observe.Handler, time.Since(start)) }()
+			}
 			handler.(MessageHandler)(m, msg, e)
 		} else {
 			ctx := newContext(m, msg, e)

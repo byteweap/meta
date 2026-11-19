@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"runtime/debug"
+	"time"
 
 	"github.com/byteweap/meta/component/broker"
 	"github.com/byteweap/meta/component/log"
+	"github.com/byteweap/meta/component/observe"
 	"github.com/byteweap/meta/component/selector"
 	"github.com/byteweap/meta/internal/cluster"
 	"github.com/byteweap/meta/pkg/async"
@@ -95,27 +97,17 @@ func (g *Gate) replyError(reqMsg *broker.Message, code int, tip string) error {
 
 // 将业务帧原样转发至注册中心当前可用的目标实例
 func (g *Gate) dispatch(uid int64, sessionID, toService string, data []byte) error {
-	d, err := g.ensure(toService)
+	observer := g.opts.observer
+	var start time.Time
+	if observer != nil {
+		start = time.Now()
+	}
+	subject, err := g.selectSubject(uid, toService)
+	if observer != nil {
+		observer.Observe(observe.Routing, time.Since(start))
+	}
 	if err != nil {
 		return err
-	}
-	nodeID, err := g.opts.locator.Node(g.ctx, uid, toService)
-	if err != nil {
-		return fmt.Errorf("locate node: %w", err)
-	}
-
-	var subject string
-	if nodeID == "" {
-		subject, err = d.SelectSubject(conv.String(uid))
-		if err != nil {
-			return fmt.Errorf("select node: %w", err)
-		}
-	} else {
-		subject = d.Subject(nodeID)
-		if subject == "" {
-			// 有状态业务不能在绑定失效时改投其他实例
-			return fmt.Errorf("bound node %q: %w", nodeID, selector.ErrNoAvailableNode)
-		}
 	}
 	// 构建消息头
 	var (
@@ -129,6 +121,31 @@ func (g *Gate) dispatch(uid int64, sessionID, toService string, data []byte) err
 	}
 	log.Debugf("[websocket] dispatch success, uid: %v, subject: %v", uid, subject)
 	return nil
+}
+
+func (g *Gate) selectSubject(uid int64, toService string) (string, error) {
+	d, err := g.ensure(toService)
+	if err != nil {
+		return "", err
+	}
+	nodeID, err := g.opts.locator.Node(g.ctx, uid, toService)
+	if err != nil {
+		return "", fmt.Errorf("locate node: %w", err)
+	}
+
+	if nodeID == "" {
+		subject, err := d.SelectSubject(conv.String(uid))
+		if err != nil {
+			return "", fmt.Errorf("select node: %w", err)
+		}
+		return subject, nil
+	}
+	subject := d.Subject(nodeID)
+	if subject == "" {
+		// 有状态业务不能在绑定失效时改投其他实例
+		return "", fmt.Errorf("bound node %q: %w", nodeID, selector.ErrNoAvailableNode)
+	}
+	return subject, nil
 }
 
 // 广播系统事件

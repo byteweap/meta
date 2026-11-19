@@ -14,6 +14,7 @@ import (
 
 	"github.com/byteweap/meta"
 	"github.com/byteweap/meta/component/broker"
+	"github.com/byteweap/meta/component/observe"
 	"github.com/byteweap/meta/envelope"
 	"github.com/byteweap/meta/internal/cluster"
 )
@@ -182,7 +183,8 @@ func TestDrainDeadlineCancelsStartedReply(t *testing.T) {
 func TestDrainStopsBlockedSerialAdmission(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		bro := &panicBroker{replies: make(chan panicReply, 3)}
-		m := New(Broker(bro), Locator(lifecycleLocator{}), MessageBufferSize(1))
+		obs := &requestObservation{}
+		m := New(Broker(bro), Locator(lifecycleLocator{}), MessageBufferSize(1), Observer(obs))
 		entered, release := make(chan struct{}), make(chan struct{})
 		finish := sync.OnceFunc(func() { close(release) })
 		defer finish()
@@ -211,5 +213,6 @@ func TestDrainStopsBlockedSerialAdmission(t *testing.T) {
 		require.Len(t, bro.replies, 2)
 		require.Equal(t, "running", (<-bro.replies).subject)
 		require.Equal(t, "queued", (<-bro.replies).subject)
+		require.Equal(t, []observe.Reason{observe.Stopping}, obs.reasons)
 	})
 }

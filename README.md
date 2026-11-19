@@ -308,6 +308,7 @@ Meta 的核心组件都以接口形式存在：
 - `component/registry.Registry`：提供 `Register/Deregister/GetService/Watch`，用于服务注册发现。
 - `component/locator.Locator`：维护 `uid -> service -> nodeID`，用于玩家粘性路由；`SessionLocator` 增加 Gate 运行租约、会话认领、条件释放和在线状态查询，供 Gate/Mesh 处理连接归属和状态事件。
 - `component/selector.Selector`：根据服务实例列表选择目标节点，支持过滤器扩展。
+- `component/observe.Observer`：可选的请求阶段耗时与框架拒绝回调。
 - `component/log.Logger`：统一日志门面，允许替换为 zap/logrus/zerolog 等实现。
 - `encoding.Codec`：统一编解码器注册和查找，内置 json、proto、msgpack、yaml、toml、xml。
 
@@ -320,6 +321,19 @@ Meta 的核心组件都以接口形式存在：
 - Logger：Zap、Logrus、Zerolog、Aliyun、Tencent、Fluent。
 
 这些实现通常以独立 Go module 组织，业务可以只引入实际需要的基础设施依赖。
+
+### 请求链路观测
+
+实现 `observe.Observer` 后，通过 `gate.Observer(obs)` 和 `mesh.Observer(obs)` 注入。默认关闭。回调在请求路径上同步调用，可能并发，适合直接记录到线程安全的直方图和计数器。框架会记录回调的 panic 并继续处理请求。
+
+| 阶段 | 计时范围 |
+| --- | --- |
+| `Routing` | Gate 从查找服务到选出目标，包含发现、定位和选择，止于 Broker 发布前 |
+| `Queue` | Mesh 从尝试入队到取出消息，串行队列满时包含等待入队的时间 |
+| `Handler` | Mesh 执行已注册的业务处理器。客户端处理器内同步发送的回包也计入这个阶段 |
+| `Reply` | Mesh 向 Broker 提交客户端响应或 RPC 回包，止于 Broker 调用返回 |
+
+拒绝原因包括 Gate 选点或转发失败（`Unavailable`）、Mesh 的 RPC 执行与排队名额用尽（`QueueFull`）、Mesh 判定 RPC 截止时间已到（`DeadlineExceeded`），以及停服期间拒收或丢弃尚未执行的请求（`Stopping`）。计数以框架决策为准。会话事件、主动推送和出站 RPC 不参与观测。
 
 ## 快速示例
 

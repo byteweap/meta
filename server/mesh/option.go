@@ -3,8 +3,10 @@ package mesh
 import (
 	"github.com/byteweap/meta/component/broker"
 	"github.com/byteweap/meta/component/locator"
+	"github.com/byteweap/meta/component/observe"
 	"github.com/byteweap/meta/component/registry"
 	"github.com/byteweap/meta/component/selector"
+	"github.com/byteweap/meta/internal/observation"
 )
 
 const (
@@ -23,10 +25,16 @@ type options struct {
 	broker            broker.Broker          // 消息传输代理
 	discovery         registry.Registry
 	selectorFunc      func() selector.Selector
+	observer          observe.Observer
 }
 
 // Option 定义 Mesh 可选配置函数
 type Option func(*options)
+
+// Observer 设置 Mesh 的入站请求观测回调。默认为 nil，nil 关闭观测
+func Observer(observer observe.Observer) Option {
+	return func(o *options) { o.observer = observation.Protect(observer) }
+}
 
 // defaultOptions 返回默认配置
 func defaultOptions() *options {

@@ -16,6 +16,7 @@ import (
 	"github.com/byteweap/meta"
 	"github.com/byteweap/meta/component/broker"
 	"github.com/byteweap/meta/component/locator"
+	"github.com/byteweap/meta/component/observe"
 	"github.com/byteweap/meta/envelope"
 	"github.com/byteweap/meta/internal/cluster"
 )
@@ -107,7 +108,8 @@ func TestRPCConcurrencyDispatchOrder(t *testing.T) {
 func TestRPCConcurrencyCapacityAndExpiry(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		bro := &panicBroker{replies: make(chan panicReply, 5), panicReplyFor: "overflow"}
-		m := New(Broker(bro), Locator(lifecycleLocator{}), RPCConcurrency(2, 1))
+		obs := &requestObservation{}
+		m := New(Broker(bro), Locator(lifecycleLocator{}), RPCConcurrency(2, 1), Observer(obs))
 		entered, release := make(chan string, 5), make(chan struct{})
 		m.RPCRoute("work", "1", func(ctx context.Context, _ *Mesh, msg *broker.Message) ([]byte, string, int) {
 			entered <- msg.Reply
@@ -139,6 +141,7 @@ func TestRPCConcurrencyCapacityAndExpiry(t *testing.T) {
 		require.Empty(t, entered)
 		require.NotContains(t, first.Header, "code")
 		require.NotContains(t, first.Header, "tip")
+		require.Equal(t, []observe.Reason{observe.QueueFull, observe.DeadlineExceeded}, obs.reasons)
 	})
 }
 
@@ -172,7 +175,8 @@ func TestRPCConcurrencyZeroQueue(t *testing.T) {
 func TestRPCConcurrencyStop(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		bro := &panicBroker{replies: make(chan panicReply, 4), panicReplyFor: "running"}
-		m := New(Broker(bro), Locator(lifecycleLocator{}), RPCConcurrency(1, 2))
+		obs := &requestObservation{}
+		m := New(Broker(bro), Locator(lifecycleLocator{}), RPCConcurrency(1, 2), Observer(obs))
 		canceled, release := make(chan struct{}), make(chan struct{})
 		unblock := sync.OnceFunc(func() { close(release) })
 		defer unblock()
@@ -199,6 +203,7 @@ func TestRPCConcurrencyStop(t *testing.T) {
 		require.NoError(t, m.Stop(t.Context()))
 		bro.handler(poolRequest("late"))
 		require.Empty(t, bro.replies)
+		require.Equal(t, []observe.Reason{observe.Stopping, observe.Stopping}, obs.reasons)
 	})
 }
 

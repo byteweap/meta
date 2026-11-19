@@ -6,8 +6,10 @@ import (
 
 	"github.com/byteweap/meta/component/broker"
 	"github.com/byteweap/meta/component/locator"
+	"github.com/byteweap/meta/component/observe"
 	"github.com/byteweap/meta/component/registry"
 	"github.com/byteweap/meta/component/selector"
+	"github.com/byteweap/meta/internal/observation"
 )
 
 const (
@@ -48,9 +50,15 @@ type options struct {
 	broker       broker.Broker            // 消息传输代理
 	discovery    registry.Registry        // 服务发现
 	selectorFunc func() selector.Selector // 选择器创建函数
+	observer     observe.Observer
 }
 
 type Option func(*options)
+
+// Observer 设置 Gate 的请求观测回调。默认为 nil，nil 关闭观测
+func Observer(observer observe.Observer) Option {
+	return func(o *options) { o.observer = observation.Protect(observer) }
+}
 
 func defaultOptions() *options {
 	return &options{

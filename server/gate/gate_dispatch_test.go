@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/byteweap/meta/component/observe"
 	"github.com/byteweap/meta/component/registry"
-	"github.com/byteweap/meta/component/selector"
 	"github.com/byteweap/meta/envelope"
 )
 
@@ -23,6 +23,14 @@ type dispatchTestLocator struct {
 	calls atomic.Int32
 	node  func() (string, error)
 }
+
+type dispatchObserver struct {
+	stages  chan observe.Stage
+	reasons chan observe.Reason
+}
+
+func (o dispatchObserver) Observe(stage observe.Stage, _ time.Duration) { o.stages <- stage }
+func (o dispatchObserver) Reject(reason observe.Reason)                 { o.reasons <- reason }
 
 func (l *dispatchTestLocator) Node(context.Context, int64, string) (string, error) {
 	l.calls.Add(1)
@@ -71,13 +79,20 @@ func TestGateDispatchErrorResponse(t *testing.T) {
 				get: func(context.Context, string) ([]*registry.ServiceInstance, error) { return tc.instances, tc.getErr },
 			}
 			bro := &testBroker{pubErrs: map[string]error{"meta.gate.game.game-1": failure}}
-			opts := []Option{Locator(loc), Discovery(reg), Broker(bro), SelectorFunc(func() selector.Selector { return &testSelector{} })}
+			obs := dispatchObserver{stages: make(chan observe.Stage, 3), reasons: make(chan observe.Reason, 3)}
+			opts := []Option{Locator(loc), Discovery(reg), Broker(bro), testGateSelector(), Observer(obs)}
 			s := newOwnershipServer(t, newOwnershipLocator(), "gate-1", opts...)
 			conn := s.dial(t, 42, "current")
 			// 同一连接连续发送，任何多余的回包都会被下一次读取捕获
 			for _, seq := range []uint64{0, 17} {
 				sendDispatchRequest(t, conn, tc.service, seq)
 				requireDispatchError(t, conn, seq, tc.code)
+			}
+			require.Len(t, obs.stages, 2)
+			require.Len(t, obs.reasons, 2)
+			for range 2 {
+				require.Equal(t, observe.Routing, <-obs.stages)
+				require.Equal(t, observe.Unavailable, <-obs.reasons)
 			}
 			require.Equal(t, tc.lookups, loc.calls.Load())
 			require.Equal(t, tc.watches, reg.watchCount.Load())

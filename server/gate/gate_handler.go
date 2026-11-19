@@ -9,6 +9,7 @@ import (
 	"github.com/olahol/melody"
 
 	"github.com/byteweap/meta/component/log"
+	"github.com/byteweap/meta/component/observe"
 	"github.com/byteweap/meta/encoding/proto"
 	"github.com/byteweap/meta/envelope"
 	"github.com/byteweap/meta/internal/cluster"
@@ -119,6 +120,13 @@ func (g *Gate) handleBinaryMessage(s *melody.Session, msg []byte) {
 		return
 	}
 	if err := g.dispatch(uid, sessionID, incoming.Service, msg); err != nil {
+		if observer := g.opts.observer; observer != nil {
+			reason := observe.Unavailable
+			if g.ctx.Err() != nil {
+				reason = observe.Stopping
+			}
+			observer.Reject(reason)
+		}
 		code := http.StatusServiceUnavailable
 		if errors.Is(err, errServiceNotFound) {
 			code = http.StatusNotFound

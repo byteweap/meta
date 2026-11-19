@@ -188,7 +188,7 @@ m.Route(1, 1, mesh.Handle(EnterGame))
 
 默认客户端请求等待串行队列空出位置。通过 `mesh.ClientOverloadRejection(true)` 启用满队列快速拒绝，队列容量由 `mesh.MessageBufferSize` 设置。成功入队的消息按原顺序执行，会话事件和 RPC 沿用各自的准入规则。
 
-满队列时记录一次 `QueueFull`。可解析的请求若携带 UID、原会话 ID 和回复地址，Mesh 尝试一次绑定原会话的 `503` 响应，回填原 `seq/cmd/version`。拒绝回包的上下文期限最多 100 毫秒，开始排空时取消。Broker 决定在途发布何时响应取消。
+满队列时记录一次 `QueueFull`。每个 Mesh 提供一个在途回包名额，名额占用时只计数。拿到名额后，Mesh 校验上行帧、UID、原会话 ID 和回复地址，对可回包的请求尝试发送一次 `503`，回填原 `seq/cmd/version`。拒绝回包的上下文期限最多 100 毫秒，开始排空时取消。Broker 决定在途发布何时响应取消。
 
 ### 系统事件
 

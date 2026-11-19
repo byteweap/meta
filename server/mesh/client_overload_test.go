@@ -3,12 +3,14 @@ package mesh
 import (
 	"context"
 	"net/http"
+	"slices"
 	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/byteweap/meta/component/broker"
@@ -154,6 +156,46 @@ func TestClientOverloadPreservesBlockingAdmission(t *testing.T) {
 	}
 }
 
+func TestClientOverloadBoundsConcurrentReplies(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const burst = 32
+		publishing, returned := make(chan struct{}, burst+1), make(chan struct{}, burst)
+		hold := make(chan struct{})
+		finish := sync.OnceFunc(func() { close(hold) })
+		defer finish()
+		bro := &clientOverloadBroker{publish: func(_ context.Context, _ *broker.Message) error {
+			publishing <- struct{}{}
+			<-hold
+			return nil
+		}}
+		obs := &requestObservation{}
+		m, release, _ := startFullClientQueue(t, bro, ClientOverloadRejection(true), Observer(obs))
+		msg := clientOverloadRequest(t, 4)
+		var deliveries sync.WaitGroup
+		for range burst {
+			deliveries.Go(func() {
+				bro.handler(msg)
+				returned <- struct{}{}
+			})
+		}
+		synctest.Wait()
+		require.Len(t, publishing, 1)
+		require.Len(t, returned, burst-1)
+
+		finish()
+		deliveries.Wait()
+		bro.handler(msg)
+		require.Len(t, publishing, 2, "回包结束后应能重新获得名额")
+		m.BeginDrain(t.Context())
+		release()
+		require.NoError(t, m.Stop(t.Context()))
+		require.Len(t, obs.reasons, burst+1)
+		for _, reason := range obs.reasons {
+			require.Equal(t, observe.QueueFull, reason)
+		}
+	})
+}
+
 func TestClientOverloadReplyTimeout(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		result := make(chan error, 1)
@@ -198,4 +240,54 @@ func TestClientOverloadDrainCancelsAndWaitsForReply(t *testing.T) {
 		finish()
 		require.NoError(t, <-stopped)
 	})
+}
+
+func TestDecodeClientReplyHeaderMatchesEnvelope(t *testing.T) {
+	bytesField := func(n protowire.Number, b []byte) []byte {
+		return protowire.AppendBytes(protowire.AppendTag(nil, n, protowire.BytesType), b)
+	}
+	encodeHeader := func(h *envelope.Header) []byte {
+		data, err := proto.Marshal(h)
+		require.NoError(t, err)
+		return bytesField(clientEnvelopeHeaderField, data)
+	}
+	first := encodeHeader(&envelope.Header{Seq: 17, Cmd: 7})
+	second := encodeHeader(&envelope.Header{Version: 2})
+	zeroSeq := bytesField(clientEnvelopeHeaderField, protowire.AppendVarint(protowire.AppendTag(nil, 1, protowire.VarintType), 0))
+	payload := bytesField(3, make([]byte, 2*1024))
+	invalidField := protowire.AppendVarint(protowire.AppendTag(nil, protowire.MaxValidNumber+1, protowire.VarintType), 0)
+	wrongType := protowire.AppendVarint(protowire.AppendTag(nil, clientEnvelopeHeaderField, protowire.VarintType), 1)
+	group := protowire.AppendTag(nil, 99, protowire.StartGroupType)
+	group = append(group, first...)
+	group = protowire.AppendTag(group, 99, protowire.EndGroupType)
+
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		{"empty header", bytesField(clientEnvelopeHeaderField, nil)},
+		{"payload before header", slices.Concat(payload, first)},
+		{"merge headers and explicit zero", slices.Concat(first, second, zeroSeq)},
+		{"unknown group and wrong wire type", slices.Concat(group, wrongType, second)},
+		{"unknown group is not a header", group},
+		{"missing header", payload},
+		{"malformed header", bytesField(clientEnvelopeHeaderField, []byte{0xff})},
+		{"truncated payload", slices.Concat(first, payload[:len(payload)-1])},
+		{"invalid UTF-8 service", slices.Concat(first, bytesField(clientEnvelopeServiceField, []byte{0xff}))},
+		{"invalid field number", slices.Concat(first, invalidField)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var frame envelope.ClientEnvelope
+			err := proto.Unmarshal(tc.data, &frame)
+			var header envelope.Header
+			got := decodeClientReplyHeader(tc.data, &header)
+			require.Equal(t, err == nil && frame.GetHeader() != nil, got)
+			if got {
+				want := frame.GetHeader()
+				require.Equal(t, want.GetSeq(), header.GetSeq())
+				require.Equal(t, want.GetCmd(), header.GetCmd())
+				require.Equal(t, want.GetVersion(), header.GetVersion())
+			}
+		})
+	}
 }

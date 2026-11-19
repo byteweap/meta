@@ -282,7 +282,10 @@ func (m *Mesh) loop(inputCtx context.Context, pool *rpcPool) error {
 	)
 
 	var inputMu sync.RWMutex
-	var rejects sync.WaitGroup
+	var replySlot chan struct{}
+	if o.clientOverload {
+		replySlot = make(chan struct{}, 1)
+	}
 	// 取消先唤醒阻塞的投递，再等待在途投递退到锁外，确保可以关闭队列
 	closeInput := context.AfterFunc(inputCtx, func() {
 		inputMu.Lock()
@@ -290,7 +293,7 @@ func (m *Mesh) loop(inputCtx context.Context, pool *rpcPool) error {
 		inputMu.Unlock()
 	})
 	defer closeInput()
-	if o.observer != nil || o.clientOverload {
+	if o.observer != nil || replySlot != nil {
 		defer func() {
 			// 订阅可能在返回前投递，启动失败时也要关闭输入并清点队列
 			m.stopInput()
@@ -299,7 +302,11 @@ func (m *Mesh) loop(inputCtx context.Context, pool *rpcPool) error {
 					o.observer.Reject(observe.Stopping)
 				}
 			}
-			rejects.Wait()
+			if replySlot != nil {
+				// 准入和队列已经关闭，取到名额即表示原回包已退出
+				replySlot <- struct{}{}
+				<-replySlot
+			}
 		}()
 	}
 	receive := func(msg *broker.Message) {
@@ -317,7 +324,7 @@ func (m *Mesh) loop(inputCtx context.Context, pool *rpcPool) error {
 			o.observer.Reject(observe.Stopping)
 		}
 	}
-	if o.clientOverload {
+	if replySlot != nil {
 		blockingReceive := receive
 		receive = func(msg *broker.Message) {
 			if msg == nil || msg.Reply != "" || !isRequest(msg) {
@@ -334,11 +341,17 @@ func (m *Mesh) loop(inputCtx context.Context, pool *rpcPool) error {
 			case msgChan <- m.queued(msg):
 				inputMu.RUnlock()
 			default:
-				// 关闭准入和队列后再等待，确保不会与 Wait 并发新增回包
-				rejects.Add(1)
+				canReply := false
+				select {
+				case replySlot <- struct{}{}:
+					canReply = true
+				default:
+				}
 				inputMu.RUnlock()
-				defer rejects.Done()
-				m.rejectClientRequest(inputCtx, msg)
+				if canReply {
+					defer func() { <-replySlot }()
+				}
+				m.rejectClientRequest(inputCtx, msg, canReply)
 			}
 		}
 	}

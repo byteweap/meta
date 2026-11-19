@@ -65,7 +65,7 @@ func MessageBufferSize(size int) Option {
 }
 
 // ClientOverloadRejection 设置客户端请求在串行队列满时是否快速拒绝，默认关闭
-// 启用时对可回包的请求尝试一次 503，停服时取消这类回包
+// 启用时每个 Mesh 最多同时尝试一个 503 回包，停服时取消该回包
 func ClientOverloadRejection(enabled bool) Option {
 	return func(o *options) { o.clientOverload = enabled }
 }

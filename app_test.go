@@ -39,6 +39,7 @@ func (s *lifecycleServer) Start(ctx context.Context) error {
 	<-ctx.Done()
 	return ctx.Err()
 }
+
 func (s *lifecycleServer) Stop(ctx context.Context) error {
 	s.stopCalls.Add(1)
 	if s.stop != nil {
@@ -46,6 +47,7 @@ func (s *lifecycleServer) Stop(ctx context.Context) error {
 	}
 	return nil
 }
+
 func (s *lifecycleServer) Endpoint(ctx context.Context) (*url.URL, error) {
 	if s.endpoint != nil {
 		return s.endpoint(ctx)
@@ -68,6 +70,7 @@ func (r *lifecycleRegistry) Register(ctx context.Context, _ *registry.ServiceIns
 	}
 	return nil
 }
+
 func (r *lifecycleRegistry) Deregister(ctx context.Context, _ *registry.ServiceInstance) error {
 	r.deregisterCalls.Add(1)
 	if r.deregister != nil {
@@ -335,6 +338,30 @@ func TestAppStopBeforeReadinessDoesNotRegister(t *testing.T) {
 	require.NoError(t, awaitLifecycle(t, result))
 	require.Zero(t, reg.registerCalls.Load())
 	require.Equal(t, int32(1), srv.stopCalls.Load())
+}
+
+type drainLifecycleServer struct {
+	*lifecycleServer
+	drains atomic.Int32
+}
+
+func (s *drainLifecycleServer) BeginDrain(context.Context) { s.drains.Add(1) }
+
+func TestAppStopStillCancelsDrainerBeforeReady(t *testing.T) {
+	srv := &drainLifecycleServer{lifecycleServer: newLifecycleServer()}
+	srv.start = func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	reg := &lifecycleRegistry{}
+	app := New(Server(srv), Registry(reg), Signal())
+	done := runLifecycleApp(t, app)
+	ctx := awaitLifecycle(t, srv.entered)
+	require.NoError(t, app.Stop())
+	require.NoError(t, awaitLifecycle(t, done))
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	require.EqualValues(t, 1, srv.drains.Load())
+	require.Zero(t, reg.registerCalls.Load())
 }
 
 func TestAppCleanupTimeoutStillRunsPostStop(t *testing.T) {

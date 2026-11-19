@@ -23,7 +23,7 @@ func newRPCPool(m *Mesh, capacity int) *rpcPool {
 	return &rpcPool{mesh: m, jobs: make(chan *broker.Message, capacity), free: capacity}
 }
 
-func (p *rpcPool) receiver(next broker.Handler) broker.Handler {
+func (p *rpcPool) receiver(inputCtx context.Context, next broker.Handler) broker.Handler {
 	return func(msg *broker.Message) {
 		if msg == nil || msg.Reply == "" {
 			next(msg)
@@ -34,7 +34,7 @@ func (p *rpcPool) receiver(next broker.Handler) broker.Handler {
 			p.mu.Unlock()
 			return
 		}
-		if p.free > 0 && p.mesh.ctx.Err() == nil {
+		if p.free > 0 && inputCtx.Err() == nil {
 			// 预留名额保证投递不会阻塞，即使空闲 worker 尚未得到调度
 			p.free--
 			p.jobs <- msg
@@ -72,11 +72,13 @@ func (p *rpcPool) close() {
 	close(p.jobs)
 	p.mu.Unlock()
 
-	// Mesh 已取消，复用出队校验即可回复剩余请求，忙碌的 worker 可以稍后退出
-	var replies rpcReplyTimer
-	defer replies.stop()
-	for msg := range p.jobs {
-		p.mesh.handleRPC(msg, &replies)
+	if p.mesh.ctx.Err() != nil {
+		// 启动失败或硬取消时不能依赖 worker，队列里的 RPC 直接按停服规则处理
+		var replies rpcReplyTimer
+		defer replies.stop()
+		for msg := range p.jobs {
+			p.mesh.handleRPC(msg, &replies)
+		}
 	}
 	p.inFlight.Wait()
 }
@@ -95,7 +97,7 @@ func (r *rpcReplyTimer) context(parent context.Context) context.Context {
 		}
 		r.cancel()
 	}
-	r.ctx, r.cancel = context.WithTimeout(context.WithoutCancel(parent), rpcReplyTimeout)
+	r.ctx, r.cancel = context.WithTimeout(parent, rpcReplyTimeout)
 	return r.ctx
 }
 

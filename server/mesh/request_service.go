@@ -16,10 +16,10 @@ func (m *Mesh) RequestService(ctx context.Context, service, cmd, version string,
 		return nil, "", 0, err
 	}
 	m.mu.Lock()
-	r, from, stopped := m.resolver, m.appName, m.stopped
+	r, from, runCtx := m.resolver, m.appName, m.ctx
 	m.mu.Unlock()
-	if stopped {
-		return nil, "", 0, context.Canceled
+	if err := runCtx.Err(); err != nil {
+		return nil, "", 0, err
 	}
 	if r == nil {
 		if m.opts.discovery == nil {

@@ -147,10 +147,13 @@ func TestRPCConcurrencyZeroQueue(t *testing.T) {
 		bro := &panicBroker{replies: make(chan panicReply, 2)}
 		m := New(Broker(bro), Locator(lifecycleLocator{}), RPCConcurrency(1, 0))
 		entered := make(chan struct{})
-		m.RPCRoute("work", "1", func(ctx context.Context, _ *Mesh, _ *broker.Message) ([]byte, string, int) {
+		release := make(chan struct{})
+		unblock := sync.OnceFunc(func() { close(release) })
+		defer unblock()
+		m.RPCRoute("work", "1", func(context.Context, *Mesh, *broker.Message) ([]byte, string, int) {
 			close(entered)
-			<-ctx.Done()
-			return nil, "stopping", http.StatusServiceUnavailable
+			<-release
+			return []byte("done"), "", http.StatusOK
 		})
 		runTestMesh(t, m)
 		bro.handler(poolRequest("running"))
@@ -159,8 +162,9 @@ func TestRPCConcurrencyZeroQueue(t *testing.T) {
 		<-entered
 		bro.handler(poolRequest("overflow"))
 		require.Equal(t, "overflow", (<-bro.replies).subject)
+		unblock()
 		require.NoError(t, m.Stop(t.Context()))
-		require.Equal(t, panicReply{"running", "503", "stopping", nil}, <-bro.replies)
+		require.Equal(t, panicReply{"running", "200", "ok", []byte("done")}, <-bro.replies)
 		require.Empty(t, bro.replies)
 	})
 }
@@ -186,21 +190,13 @@ func TestRPCConcurrencyStop(t *testing.T) {
 		bro.handler(poolRequest("running"))
 		synctest.Wait()
 		bro.handler(poolRequest("queued"))
-		expiring := poolRequest("expiring")
-		expiring.Header.Set(rpcDeadlineHeader, strconv.FormatInt(time.Now().Add(time.Second).UnixMilli(), 10))
-		bro.handler(expiring)
-		time.Sleep(time.Second)
 		timeout, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
 		require.ErrorIs(t, m.Stop(timeout), context.DeadlineExceeded)
 		<-canceled
-		require.Len(t, bro.replies, 2)
-		require.ElementsMatch(t, []panicReply{
-			{"queued", "503", "Service Unavailable", nil}, {"expiring", "504", "Gateway Timeout", nil},
-		}, []panicReply{<-bro.replies, <-bro.replies})
+		require.Empty(t, bro.replies, "reply budget has expired")
 		unblock()
 		require.NoError(t, m.Stop(t.Context()))
-		require.Equal(t, panicReply{"running", "503", "stopping", nil}, <-bro.replies)
 		bro.handler(poolRequest("late"))
 		require.Empty(t, bro.replies)
 	})
@@ -232,10 +228,15 @@ func TestRPCConcurrencyStopWaitsForOverloadReply(t *testing.T) {
 		}
 		m := New(Broker(bro), Locator(lifecycleLocator{}), RPCConcurrency(1, 1))
 		entered := make(chan struct{})
-		m.RPCRoute("work", "1", func(ctx context.Context, _ *Mesh, _ *broker.Message) ([]byte, string, int) {
-			close(entered)
-			<-ctx.Done()
-			return nil, "stopping", http.StatusServiceUnavailable
+		finish := make(chan struct{})
+		unblock := sync.OnceFunc(func() { close(finish) })
+		defer unblock()
+		m.RPCRoute("work", "1", func(_ context.Context, _ *Mesh, msg *broker.Message) ([]byte, string, int) {
+			if msg.Reply == "running" {
+				close(entered)
+				<-finish
+			}
+			return []byte("done"), "", http.StatusOK
 		})
 		runTestMesh(t, m)
 		bro.handler(poolRequest("running"))
@@ -247,10 +248,12 @@ func TestRPCConcurrencyStopWaitsForOverloadReply(t *testing.T) {
 		stopped := make(chan error, 1)
 		go func() { stopped <- m.Stop(t.Context()) }()
 		synctest.Wait()
+		unblock()
+		synctest.Wait()
 		require.Empty(t, stopped)
 		require.Len(t, bro.replies, 2)
 		require.ElementsMatch(t, []panicReply{
-			{"running", "503", "stopping", nil}, {"queued", "503", "Service Unavailable", nil},
+			{"running", "200", "ok", []byte("done")}, {"queued", "200", "ok", []byte("done")},
 		}, []panicReply{<-bro.replies, <-bro.replies})
 		close(bro.release)
 		require.NoError(t, <-stopped)
@@ -274,10 +277,13 @@ func TestRPCConcurrencyDeliveryDuringStop(t *testing.T) {
 		<-entered
 		timeout, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
-		require.ErrorIs(t, m.Stop(timeout), context.DeadlineExceeded)
+		m.BeginDrain(timeout)
 		bro.handler(poolRequest("during-stop"))
 		require.Len(t, bro.replies, 1, "a delivered RPC must receive a shutdown reply")
 		require.Equal(t, panicReply{"during-stop", "503", "Service Unavailable", nil}, <-bro.replies)
+		require.ErrorIs(t, m.Stop(timeout), context.DeadlineExceeded)
+		bro.handler(poolRequest("after-timeout"))
+		require.Empty(t, bro.replies, "no reply is started after the drain deadline")
 	})
 }
 

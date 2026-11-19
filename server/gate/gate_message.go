@@ -128,6 +128,15 @@ func (g *Gate) selectSubject(uid int64, toService string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if d.Stateless() {
+		subject, selectErr := d.SelectStatelessSubject(conv.String(uid))
+		if selectErr != nil {
+			return "", fmt.Errorf("select node: %w", selectErr)
+		}
+		if subject != "" {
+			return subject, nil
+		}
+	}
 	nodeID, err := g.opts.locator.Node(g.ctx, uid, toService)
 	if err != nil {
 		return "", fmt.Errorf("locate node: %w", err)

@@ -104,6 +104,8 @@ func (r *Registry) Watch(ctx context.Context, serviceName string) (registry.Watc
 	return newWatcher(ctx, r, serviceName), nil
 }
 
+// Register 注册服务和实例，将实例元数据复制为 ServiceComb 实例属性
+// appId 和 environment 由适配器根据环境变量设置
 func (r *Registry) Register(_ context.Context, svcIns *registry.ServiceInstance) error {
 	fw := &discovery.FrameWork{
 		Name:    frameWorkName,
@@ -146,10 +148,10 @@ func (r *Registry) Register(_ context.Context, svcIns *registry.ServiceInstance)
 		}
 		svcIns.ID = id.String()
 	}
-	props := map[string]string{
-		appIDKey: appID,
-		envKey:   env,
-	}
+	props := make(map[string]string, len(svcIns.Metadata)+2)
+	maps.Copy(props, svcIns.Metadata)
+	props[appIDKey] = appID
+	props[envKey] = env
 	_, err = r.cli.RegisterMicroServiceInstance(&discovery.MicroServiceInstance{
 		InstanceId: svcIns.ID,
 		ServiceId:  sid,

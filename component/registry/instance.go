@@ -4,6 +4,10 @@ import (
 	"sort"
 )
 
+// MetadataStateless 是服务实例声明无状态的元数据键。值为 "true" 时声明生效
+// Gate 仅在同一服务的所有可用实例均声明无状态时跳过玩家定位
+const MetadataStateless = "stateless"
+
 // ServiceInstance 服务发现系统中的服务实例
 type ServiceInstance struct {
 	// ID 注册时的唯一实例ID

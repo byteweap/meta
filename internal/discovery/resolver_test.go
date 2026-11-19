@@ -38,6 +38,81 @@ type resolverTestSelector struct{ selector.Selector }
 
 func (resolverTestSelector) Update([]selector.Node) {}
 
+type statelessTestSelector struct {
+	selector.Selector
+	update func()
+}
+
+func (statelessTestSelector) Select(string, ...selector.Filter) (selector.Node, error) {
+	return selector.NewNode("live", "game", "", nil), nil
+}
+
+func (s statelessTestSelector) Update([]selector.Node) {
+	if s.update != nil {
+		s.update()
+	}
+}
+
+func TestStatelessDeclarationCoversAllRoutableInstances(t *testing.T) {
+	live := &registry.ServiceInstance{Name: "game", ID: "live", Metadata: map[string]string{registry.MetadataStateless: "true"}}
+	r := &Resolver{subject: func(_, id string) string {
+		if id == "invalid" {
+			return ""
+		}
+		return id
+	}}
+	s := &Service{Selector: statelessTestSelector{}}
+	for _, tc := range []struct {
+		name      string
+		instances []*registry.ServiceInstance
+		want      string
+	}{
+		{name: "unanimous", instances: []*registry.ServiceInstance{live}, want: "live"},
+		{
+			name: "ignore records without a routable address",
+			instances: []*registry.ServiceInstance{
+				live, nil, {Name: "game"}, {Name: "game", ID: "invalid"}, {Name: "other", ID: "live"},
+			},
+			want: "live",
+		},
+		{
+			name: "declaration must equal true",
+			instances: []*registry.ServiceInstance{
+				live, {Name: "game", ID: "other", Metadata: map[string]string{registry.MetadataStateless: "TRUE"}},
+			},
+		},
+		{name: "duplicate id disagrees", instances: []*registry.ServiceInstance{live, {Name: "game", ID: "live"}}},
+		{name: "empty snapshot"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r.update(s, "game", tc.instances)
+			require.Equal(t, tc.want != "", s.Stateless())
+			subject, err := s.SelectStatelessSubject("42")
+			require.NoError(t, err)
+			require.Equal(t, tc.want, subject)
+		})
+	}
+}
+
+func TestStatelessDeclarationChangesWithSelectorUpdate(t *testing.T) {
+	r := &Resolver{subject: func(_, id string) string { return id }}
+	sel := &statelessTestSelector{}
+	s := &Service{Selector: sel}
+	instances := []*registry.ServiceInstance{
+		{Name: "game", ID: "live", Metadata: map[string]string{registry.MetadataStateless: "true"}},
+	}
+	require.True(t, r.update(s, "game", instances))
+	sel.update = func() {
+		require.True(t, s.Stateless(), "替换前保留上一份快照的声明")
+		panic("selector update failed")
+	}
+	require.Panics(t, func() { r.update(s, "game", instances) })
+	require.Empty(t, s.Subject("live"))
+	subject, err := s.SelectStatelessSubject("42")
+	require.NoError(t, err)
+	require.Empty(t, subject)
+}
+
 func TestLastWaiterCancelsPendingLookup(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		release, stopped := make(chan struct{}), make(chan struct{})

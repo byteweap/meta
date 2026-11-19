@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/byteweap/meta/component/log"
 	"github.com/byteweap/meta/component/registry"
@@ -21,10 +22,11 @@ var ErrNotFound = fmt.Errorf("service not found: %w", selector.ErrNoAvailableNod
 // Service 持有同一代监听的选择器和实例投递地址
 type Service struct {
 	selector.Selector
-	mu       sync.RWMutex
-	subjects map[string]string
-	watcher  registry.Watcher
-	stop     func() error
+	mu        sync.RWMutex
+	subjects  map[string]string
+	stateless atomic.Bool
+	watcher   registry.Watcher
+	stop      func() error
 }
 
 // Subject 返回指定实例的投递地址，实例已下线时返回空字符串
@@ -38,6 +40,25 @@ func (s *Service) Subject(id string) string {
 func (s *Service) SelectSubject(key string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.selectSubject(key)
+}
+
+// Stateless 返回当前快照的可用实例是否均声明了无状态
+// 实际选点时由 SelectStatelessSubject 在锁内再次检查快照
+func (s *Service) Stateless() bool { return s.stateless.Load() }
+
+// SelectStatelessSubject 在快照一致声明无状态时按 key 选点。空地址且无错误表示应走玩家定位
+func (s *Service) SelectStatelessSubject(key string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	// 在锁内确认声明，避免按旧快照的声明选中新快照的实例
+	if !s.stateless.Load() {
+		return "", nil
+	}
+	return s.selectSubject(key)
+}
+
+func (s *Service) selectSubject(key string) (string, error) {
 	node, err := s.Select(key)
 	if err != nil {
 		return "", err
@@ -57,25 +78,36 @@ func matches(name string, i *registry.ServiceInstance) bool {
 func (r *Resolver) update(s *Service, name string, instances []*registry.ServiceInstance) bool {
 	subjects := make(map[string]string, len(instances))
 	nodes := make([]selector.Node, 0, len(instances))
+	stateless := true
 	for _, i := range instances {
 		if !matches(name, i) {
 			continue
 		}
-		if _, ok := subjects[i.ID]; ok {
-			continue
+		if _, ok := subjects[i.ID]; !ok {
+			subject := r.subject(name, i.ID)
+			if subject == "" {
+				continue
+			}
+			subjects[i.ID] = subject
+			nodes = append(nodes, selector.NewNode(i.ID, i.Name, i.Version, i.Metadata))
 		}
-		subject := r.subject(name, i.ID)
-		if subject == "" {
-			continue
-		}
-		subjects[i.ID] = subject
-		nodes = append(nodes, selector.NewNode(i.ID, i.Name, i.Version, i.Metadata))
+		stateless = stateless && i.Metadata[registry.MetadataStateless] == "true"
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.subjects = subjects
+	usable := false
+	defer func() {
+		// 选择器更新成功后提交快照和声明，更新发生 panic 时两者一并失效
+		if usable {
+			s.subjects = subjects
+		} else {
+			s.subjects = nil
+		}
+		s.stateless.Store(usable && stateless)
+		s.mu.Unlock()
+	}()
 	s.Update(nodes)
-	return len(nodes) != 0
+	usable = len(nodes) != 0
+	return usable
 }
 
 type entry struct {

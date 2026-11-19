@@ -126,10 +126,12 @@ message ClientEnvelope {
 
 1. Gate 读取请求的 `header` 和 `service`。首次请求按服务名查询注册中心，空结果直接回复 404。同名服务的并发请求共用一次初始化。
 2. 发现可用实例后，Gate 建立监听并再取一次快照，覆盖首次查询与监听建立之间的变化。后续请求直接使用本地快照。实例全部下线或监听失败时，Gate 清除缓存，下次请求重新发现。
-3. Gate 通过 `locator.Node(ctx, uid, service)` 查询玩家绑定。已绑定时只发给快照中的原实例，绑定失效则回复 503。未绑定时由选择器选取可用实例。
+3. 目标服务的全部可用实例都声明无状态时，Gate 直接从本地快照选点，跳过玩家定位。其他服务通过 `locator.Node(ctx, uid, service)` 查询玩家绑定。已绑定时只发给快照中的原实例，绑定失效则回复 503。使用选择器时以 UID 为 key。
 4. Gate 将客户端的原始 Protobuf 帧发往 `<prefix>.<gateName>.<service>.<nodeID>`，并在 Broker 消息头携带 uid、事件类型、回复地址、来源与目标服务，以及读取请求的连接的 `session_id`。
 
 注册中心查询、监听初始化、定位、选点或发布失败时，Gate 在原 WebSocket 连接上回复 503。Gate 的 404 和 503 均为 `RESPONSE`，来源为 Gate，回填原 `seq/cmd/version`，包括 `seq=0`。组件错误详情记入服务端日志。发布成功后若收不到业务响应，客户端通过请求截止时间结束等待。
+
+当同一服务的任意实例都能处理该服务的请求时，可在 `meta.New` 中传入 `meta.Metadata(map[string]string{registry.MetadataStateless: "true"})`，按需在同一个 map 中提供其他元数据。该声明作用于整个服务，注册中心需保留 `stateless`，Gate 随发现快照更新转发方式。需要玩家绑定的业务使用默认方式，房间归属由业务服务管理。
 
 发现任务的关闭只执行一次，初始化与关闭都纳入 Gate.Stop 等待。旧监听关闭阻塞不会阻止新请求重建，关闭错误会保留在停止结果中。GetService 与 Watch 没有共同的版本协议，因此快照查询和后续通知之间不提供强一致保证。
 

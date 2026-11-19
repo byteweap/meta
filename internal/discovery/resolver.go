@@ -1,4 +1,4 @@
-// Package discovery 在进程内按服务名共享注册中心快照和监听
+// Package discovery 为每个 Resolver 按服务名维护注册中心的实例快照和监听
 package discovery
 
 import (

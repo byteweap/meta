@@ -30,7 +30,7 @@ func (g *Gate) handleConnect(s *melody.Session) {
 	}
 	// 绑定成功后再切换连接，失败的新连接不能破坏原会话。
 	sessionID := rand.Text()
-	replaced, err := g.opts.locator.Claim(g.ctx, uid, g.appName, g.appID, sessionID)
+	replaced, err := g.opts.locator.Claim(g.ctx, uid, g.appName, g.appID, sessionID, g.runID)
 	if err != nil {
 		log.Errorf("[websocket] new connection bind gate error, uid: %v, err: %v", uid, err)
 		_ = s.WebsocketConnection().Close()

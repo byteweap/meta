@@ -19,11 +19,16 @@ import (
 	"github.com/byteweap/meta/component/locator"
 )
 
+const testGateRun = "gate-run"
+
 func newSessionTestLocator(t *testing.T) (*Locator, *miniredis.Miniredis) {
 	t.Helper()
 	server := miniredis.RunT(t)
 	l := newWith(goredis.NewClient(&goredis.Options{Addr: server.Addr()}), "test")
 	t.Cleanup(func() { _ = l.Close() })
+	if err := l.AcquireGateLease(t.Context(), testGateRun, time.Minute); err != nil {
+		t.Fatal(err)
+	}
 	return l, server
 }
 
@@ -78,8 +83,13 @@ func TestSessionUsesCallerDeadline(t *testing.T) {
 
 func TestSessionReadsPrimaryDespiteReplicaOptions(t *testing.T) {
 	primary, replica := miniredis.RunT(t), miniredis.RunT(t)
-	primary.HSet("test:locator:7", "node:gate", "gate-current", "session:gate", "current")
-	replica.HSet("test:locator:7", "node:gate", "gate-old", "session:gate", "old")
+	primary.HSet("test:locator:7", "node:gate", "gate-current", "session:gate", "current", "run:gate", testGateRun)
+	replica.HSet("test:locator:7", "node:gate", "gate-old", "session:gate", "old", "run:gate", testGateRun)
+	for _, node := range []*miniredis.Miniredis{primary, replica} {
+		if err := node.Set("test:gate-lease:"+testGateRun, "1"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	primaryAddr, replicaAddr := primary.Server().Addr(), replica.Server().Addr()
 	for _, node := range []*miniredis.Miniredis{primary, replica} {
 		node.Server().SetPreHook(func(peer *redisserver.Peer, cmd string, args ...string) bool {
@@ -149,10 +159,10 @@ func TestSessionClaimRelease(t *testing.T) {
 			if released, err := l.Release(ctx, 7, "gate", "gate-1", "old"); err != nil || released {
 				t.Fatalf("missing Release = %v, %v", released, err)
 			}
-			if replaced, err := l.Claim(ctx, 7, "gate", "gate-1", "old"); err != nil || replaced {
+			if replaced, err := l.Claim(ctx, 7, "gate", "gate-1", "old", testGateRun); err != nil || replaced {
 				t.Fatalf("initial Claim = %v, %v", replaced, err)
 			}
-			if replaced, err := l.Claim(ctx, 7, "gate", nextNode, "new"); err != nil || !replaced {
+			if replaced, err := l.Claim(ctx, 7, "gate", nextNode, "new", testGateRun); err != nil || !replaced {
 				t.Fatalf("reconnect Claim = %v, %v", replaced, err)
 			}
 			for _, owner := range []locator.Session{{ID: "old", Node: "gate-1"}, {ID: "new", Node: "wrong-node"}} {
@@ -170,7 +180,7 @@ func TestSessionClaimRelease(t *testing.T) {
 			if node, err := l.Node(ctx, 7, "gate"); err != nil || node != "" {
 				t.Fatalf("offline Node = %q, %v", node, err)
 			}
-			if replaced, err := l.Claim(ctx, 7, "gate", "gate-3", "latest"); err != nil || replaced {
+			if replaced, err := l.Claim(ctx, 7, "gate", "gate-3", "latest", testGateRun); err != nil || replaced {
 				t.Fatalf("Claim after offline = %v, %v", replaced, err)
 			}
 			if released, err := l.Release(ctx, 7, "gate", nextNode, "new"); err != nil || released {
@@ -189,10 +199,10 @@ func TestAllNodesSeparatesRoutingFromSessionState(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := l.Claim(ctx, 7, "gate", "gate-1", "session-7"); err != nil {
+	if _, err := l.Claim(ctx, 7, "gate", "gate-1", "session-7", testGateRun); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := l.Claim(ctx, 8, "gate", "gate-8", "session-8"); err != nil {
+	if _, err := l.Claim(ctx, 8, "gate", "gate-8", "session-8", testGateRun); err != nil {
 		t.Fatal(err)
 	}
 	// Historical fields are not interpreted as either a route or a session.
@@ -217,7 +227,7 @@ func TestSessionRejectsUnversionedMutation(t *testing.T) {
 	if err := l.Bind(ctx, 7, "gate", "plain-node"); err != nil {
 		t.Fatal(err)
 	}
-	if replaced, err := l.Claim(ctx, 7, "gate", "gate-1", "session-1"); err != nil || !replaced {
+	if replaced, err := l.Claim(ctx, 7, "gate", "gate-1", "session-1", testGateRun); err != nil || !replaced {
 		t.Fatalf("Claim over plain binding = %v, %v", replaced, err)
 	}
 	for _, online := range []bool{true, false} {
@@ -247,7 +257,7 @@ func TestConcurrentClaimsReleaseOnlyCurrentSession(t *testing.T) {
 	results := make(chan error, count)
 	for i := range count {
 		workers.Go(func() {
-			_, err := l.Claim(ctx, 7, "gate", fmt.Sprintf("gate-%d", i), fmt.Sprintf("session-%d", i))
+			_, err := l.Claim(ctx, 7, "gate", fmt.Sprintf("gate-%d", i), fmt.Sprintf("session-%d", i), testGateRun)
 			results <- err
 		})
 	}
@@ -291,16 +301,18 @@ type delayedResponseHook struct {
 	entered chan struct{}
 	release chan struct{}
 	once    sync.Once
+	match   func(goredis.Cmder) bool
 }
 
 func (h *delayedResponseHook) DialHook(next goredis.DialHook) goredis.DialHook { return next }
 func (h *delayedResponseHook) ProcessPipelineHook(next goredis.ProcessPipelineHook) goredis.ProcessPipelineHook {
 	return next
 }
+
 func (h *delayedResponseHook) ProcessHook(next goredis.ProcessHook) goredis.ProcessHook {
 	return func(ctx context.Context, cmd goredis.Cmder) error {
 		err := next(ctx, cmd)
-		if err == nil {
+		if err == nil && (h.match == nil || h.match(cmd)) {
 			h.once.Do(func() {
 				close(h.entered)
 				select {
@@ -359,7 +371,7 @@ func TestLocatorRejectsEmptyFields(t *testing.T) {
 	l, server := newSessionTestLocator(t)
 	ctx := context.Background()
 	for _, args := range [][3]string{{"", "node", "session"}, {"gate", "", "session"}, {"gate", "node", ""}} {
-		if _, err := l.Claim(ctx, 7, args[0], args[1], args[2]); err == nil {
+		if _, err := l.Claim(ctx, 7, args[0], args[1], args[2], testGateRun); err == nil {
 			t.Errorf("Claim accepted %q", args)
 		}
 		if _, err := l.Release(ctx, 7, args[0], args[1], args[2]); err == nil {
@@ -380,7 +392,13 @@ func TestLocatorRejectsEmptyFields(t *testing.T) {
 	if _, err := l.Session(ctx, 7, ""); err == nil {
 		t.Error("Session accepted empty service")
 	}
-	if keys := server.Keys(); len(keys) != 0 {
+	if _, err := l.Claim(ctx, 7, "gate", "node", "session", ""); err == nil {
+		t.Error("Claim accepted empty run ID")
+	}
+	if err := l.AcquireGateLease(ctx, "invalid-run", 0); err == nil {
+		t.Error("AcquireGateLease accepted zero TTL")
+	}
+	if keys := server.Keys(); !reflect.DeepEqual(keys, []string{l.gateLeaseKey(testGateRun)}) {
 		t.Fatalf("invalid arguments mutated Redis: %v", keys)
 	}
 }
@@ -392,7 +410,7 @@ func TestSessionReportsRedisFailure(t *testing.T) {
 	if _, err := l.Session(ctx, 7, "gate"); err == nil {
 		t.Error("Session swallowed Redis failure")
 	}
-	if changed, err := l.Claim(ctx, 7, "gate", "node", "session"); err == nil || changed {
+	if changed, err := l.Claim(ctx, 7, "gate", "node", "session", testGateRun); err == nil || changed {
 		t.Fatalf("Claim = %v, %v on Redis failure", changed, err)
 	}
 	if changed, err := l.Release(ctx, 7, "gate", "node", "session"); err == nil || changed {

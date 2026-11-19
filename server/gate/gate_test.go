@@ -130,7 +130,7 @@ func (l *testLocator) UnBind(context.Context, int64, string, string) error {
 
 func (l *testLocator) Close() error { return nil }
 
-func (l *testLocator) Claim(_ context.Context, uid int64, service, node, sessionID string) (bool, error) {
+func (l *testLocator) Claim(_ context.Context, uid int64, service, node, sessionID, _ string) (bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.bindCalls++
@@ -144,6 +144,12 @@ func (l *testLocator) Claim(_ context.Context, uid int64, service, node, session
 	replaced := l.sessions[key].Node != ""
 	l.sessions[key] = locator.Session{ID: sessionID, Node: node}
 	return replaced, nil
+}
+
+func (*testLocator) AcquireGateLease(context.Context, string, time.Duration) error { return nil }
+
+func (*testLocator) RenewGateLease(context.Context, string, time.Duration) (bool, error) {
+	return true, nil
 }
 
 func (l *testLocator) Release(_ context.Context, uid int64, service, node, sessionID string) (bool, error) {

@@ -2,12 +2,14 @@ package gate
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/url"
 	"sync"
+	"time"
 
 	"github.com/olahol/melody"
 
@@ -29,6 +31,7 @@ type Gate struct {
 	ctx     context.Context
 	appID   string // application ID
 	appName string // application name
+	runID   string // 运行租约标识
 
 	opts     *options       // server options
 	endpoint *url.URL       // server endpoint
@@ -60,6 +63,7 @@ func New(opts ...Option) *Gate {
 	g := &Gate{
 		ctx:      ctx,
 		cancel:   cancel,
+		runID:    rand.Text(),
 		opts:     o,
 		Server:   &http.Server{},
 		sessions: newSessions(),
@@ -196,11 +200,27 @@ func (g *Gate) Start(ctx context.Context) error {
 		}
 		return fmt.Errorf("loop failed: %w", err)
 	}
+	leaseValidUntil := time.Now().Add(gateLeaseTTL)
+	if err := g.acquireGateLease(runCtx); err != nil {
+		if runCtx.Err() != nil {
+			return runCtx.Err()
+		}
+		return fmt.Errorf("acquire Gate lease: %w", err)
+	}
+	leaseLost := make(chan struct{})
 	g.lifecycleMu.Lock()
 	if err := runCtx.Err(); err != nil {
 		g.lifecycleMu.Unlock()
 		return err
 	}
+	g.tasks.Go(func() {
+		if g.maintainGateLease(runCtx, leaseValidUntil) {
+			close(leaseLost)
+			cancel()
+			// Stop 等待续期任务退出，由另一个 goroutine 发起
+			go g.stopAfterLeaseLoss(runCtx)
+		}
+	})
 	close(g.ready)
 	g.lifecycleMu.Unlock()
 
@@ -208,8 +228,14 @@ func (g *Gate) Start(ctx context.Context) error {
 	log.Infof("[websocket] server listening on: %s", ln.Addr().String())
 
 	// 启动服务
-	if err := g.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
-		return err
+	serveErr := g.Serve(ln)
+	select {
+	case <-leaseLost:
+		return errGateLeaseLost
+	default:
+	}
+	if !errors.Is(serveErr, http.ErrServerClosed) {
+		return serveErr
 	}
 	return nil
 }

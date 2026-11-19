@@ -89,8 +89,8 @@ type gateAuthLocator struct {
 	bound chan int64
 }
 
-func (l *gateAuthLocator) Claim(ctx context.Context, uid int64, service, node, sessionID string) (bool, error) {
-	replaced, err := l.testLocator.Claim(ctx, uid, service, node, sessionID)
+func (l *gateAuthLocator) Claim(ctx context.Context, uid int64, service, node, sessionID, runID string) (bool, error) {
+	replaced, err := l.testLocator.Claim(ctx, uid, service, node, sessionID, runID)
 	l.bound <- uid
 	return replaced, err
 }

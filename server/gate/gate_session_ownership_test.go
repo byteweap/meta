@@ -53,7 +53,7 @@ func newOwnershipLocator() *ownershipLocator {
 	}
 }
 
-func (l *ownershipLocator) Claim(ctx context.Context, uid int64, _, node, id string) (bool, error) {
+func (l *ownershipLocator) Claim(ctx context.Context, uid int64, _, node, id, _ string) (bool, error) {
 	l.stateMu.Lock()
 	l.claimCount++
 	call := l.claimCount

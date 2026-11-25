@@ -108,16 +108,16 @@ func TestClientMatchesOutOfOrderResponsesAndPushes(t *testing.T) {
 
 	failure := &envelope.ResponseError{Code: 409, Message: "room is full"}
 	sendClientMessage(t, peer, &envelope.ServerEnvelope{
-		Header: secondRequest.Header, Kind: envelope.MsgType_RESPONSE, Service: "game", Error: failure,
+		Header: secondRequest.Header, Kind: envelope.MsgType_MSG_TYPE_RESPONSE, Service: "game", Error: failure,
 	})
 	secondResult := awaitClientTest(t, second)
 	require.NoError(t, secondResult.err)
 	require.Equal(t, uint32(20), secondResult.reply.GetHeader().GetCmd())
 	require.True(t, proto.Equal(failure, secondResult.reply.GetError()))
 
-	sendClientMessage(t, peer, &envelope.ServerEnvelope{Header: &envelope.Header{Cmd: 30}, Kind: envelope.MsgType_PUSH})
+	sendClientMessage(t, peer, &envelope.ServerEnvelope{Header: &envelope.Header{Cmd: 30}, Kind: envelope.MsgType_MSG_TYPE_PUSH})
 	require.Equal(t, uint32(30), awaitClientTest(t, client.Pushes()).GetHeader().GetCmd())
-	sendClientMessage(t, peer, &envelope.ServerEnvelope{Header: firstRequest.Header, Kind: envelope.MsgType_RESPONSE})
+	sendClientMessage(t, peer, &envelope.ServerEnvelope{Header: firstRequest.Header, Kind: envelope.MsgType_MSG_TYPE_RESPONSE})
 	firstResult := awaitClientTest(t, first)
 	require.NoError(t, firstResult.err)
 	require.Equal(t, uint32(10), firstResult.reply.GetHeader().GetCmd())
@@ -139,7 +139,7 @@ func TestClientClearsRequestsAfterCancelAndDisconnect(t *testing.T) {
 	next := requestInBackground(context.Background(), client, 20)
 	secondRequest := readClientRequest(t, peer)
 	require.Greater(t, secondRequest.GetHeader().GetSeq(), firstRequest.GetHeader().GetSeq())
-	sendClientMessage(t, peer, &envelope.ServerEnvelope{Header: firstRequest.Header, Kind: envelope.MsgType_RESPONSE})
+	sendClientMessage(t, peer, &envelope.ServerEnvelope{Header: firstRequest.Header, Kind: envelope.MsgType_MSG_TYPE_RESPONSE})
 	require.NoError(t, peer.Close())
 	require.Error(t, awaitClientTest(t, next).err)
 	require.Nil(t, awaitClientTest(t, client.Pushes()))
@@ -174,7 +174,7 @@ func TestClientSequenceScopeAcrossConnections(t *testing.T) {
 				requested := requestInBackground(context.Background(), client, 10)
 				request := readClientRequest(t, peer)
 				sequences = append(sequences, request.GetHeader().GetSeq())
-				sendClientMessage(t, peer, &envelope.ServerEnvelope{Header: request.Header, Kind: envelope.MsgType_RESPONSE})
+				sendClientMessage(t, peer, &envelope.ServerEnvelope{Header: request.Header, Kind: envelope.MsgType_MSG_TYPE_RESPONSE})
 				require.NoError(t, awaitClientTest(t, requested).err)
 				require.NoError(t, client.Close())
 			}

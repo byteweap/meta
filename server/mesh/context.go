@@ -169,7 +169,7 @@ func (c *Context) respondWithContext(ctx context.Context, payload []byte, failur
 			SentAtUnixMs: time.Now().UnixMilli(),
 		},
 		Service: c.mesh.appName,
-		Kind:    envelope.MsgType_RESPONSE,
+		Kind:    envelope.MsgType_MSG_TYPE_RESPONSE,
 		Error:   failure,
 		Payload: payload,
 	}

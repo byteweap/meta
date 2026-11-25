@@ -126,7 +126,7 @@ func requireDispatchError(t *testing.T, conn *websocket.Conn, seq uint64, code i
 	require.Equal(t, websocket.BinaryMessage, kind)
 	var reply envelope.ServerEnvelope
 	require.NoError(t, proto.Unmarshal(data, &reply))
-	require.Equal(t, envelope.MsgType_RESPONSE, reply.Kind)
+	require.Equal(t, envelope.MsgType_MSG_TYPE_RESPONSE, reply.Kind)
 	require.Equal(t, "gate", reply.Service)
 	require.Equal(t, seq, reply.GetHeader().GetSeq())
 	require.EqualValues(t, 7, reply.GetHeader().GetCmd())

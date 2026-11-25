@@ -36,7 +36,7 @@ func TestExitGameAcknowledgement(t *testing.T) {
 	if err := proto.Unmarshal(recorder.replies[0], &reply); err != nil {
 		t.Fatal(err)
 	}
-	if reply.Kind != envelope.MsgType_RESPONSE || reply.Error != nil || len(reply.Payload) != 0 {
+	if reply.Kind != envelope.MsgType_MSG_TYPE_RESPONSE || reply.Error != nil || len(reply.Payload) != 0 {
 		t.Fatalf("want empty success response, got %v", &reply)
 	}
 	h := reply.GetHeader()

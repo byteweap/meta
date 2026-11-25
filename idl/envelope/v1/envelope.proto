@@ -1,20 +1,22 @@
 syntax = "proto3";
-package envelope;
+
+package envelope.v1;
+
 option go_package = "github.com/byteweap/meta/envelope";
 
 message Header {
-  // 请求关联 ID。响应回填请求的值。0 表示无需关联，PUSH 使用 0
+  // 请求关联 ID。响应回填请求的值。0 表示无需关联，主动推送使用 0
   // 客户端为同一连接内尚未完成的请求分配不同的 ID，重连后可重用
   uint64 seq = 1;
-  uint32 cmd = 2;      // 业务命令，与 version 共同标识服务内的路由
-  uint32 version = 3;  // cmd 对应的业务版本
+  uint32 cmd = 2; // 业务命令，与 version 共同标识服务内的路由
+  uint32 version = 3; // cmd 对应的业务版本
   // 发送方发送消息时的 Unix 毫秒时间戳，0 表示未提供。客户端时钟不用于判断消息顺序
   int64 sent_at_unix_ms = 4;
 }
 
 // ClientEnvelope 封装客户端发往 Mesh 的上行消息，由 Gate 转发
 message ClientEnvelope {
-  Header header = 1;  // 必填
+  Header header = 1; // 必填
   string service = 2; // 目标业务服务名，不能为空
   // 业务 Protobuf 消息，类型由 (service, cmd, version) 对应的上行路由约定
   // 省略或长度为 0 表示无业务消息体
@@ -23,10 +25,10 @@ message ClientEnvelope {
 
 // ServerEnvelope 封装 Mesh 发往客户端的响应或主动推送，也用于 Gate 直接回复准入和转发错误
 message ServerEnvelope {
-  Header header = 1;  // 必填。RESPONSE 回填原请求的 seq、cmd、version
+  Header header = 1; // 必填。响应回填原请求的 seq、cmd、version
   string service = 2; // 来源服务名，Gate 直接回复时为 Gate 的服务名
-  MsgType kind = 3;   // RESPONSE 或 PUSH
-  // RESPONSE 省略时表示成功，失败时携带非零错误码。PUSH 必须省略
+  MsgType kind = 3; // MSG_TYPE_RESPONSE 或 MSG_TYPE_PUSH
+  // 成功响应和主动推送省略此字段，失败响应携带非零错误码
   ResponseError error = 4;
   // 业务 Protobuf 消息，类型由 (service, cmd, version, kind) 约定
   // 省略或长度为 0 表示无业务消息体
@@ -34,13 +36,13 @@ message ServerEnvelope {
 }
 
 enum MsgType {
-  UNKNOWN = 0;  // 缺省值，发送方不得使用
-  RESPONSE = 1; // 服务端响应
-  PUSH = 2;     // 服务端主动推送
+  MSG_TYPE_UNSPECIFIED = 0; // 缺省值，发送方不得使用
+  MSG_TYPE_RESPONSE = 1; // 服务端响应
+  MSG_TYPE_PUSH = 2; // 服务端主动推送
 }
 
 // ResponseError 携带失败响应的错误码和可选说明
 message ResponseError {
-  int32 code = 1;      // 非零错误码
-  string message = 2;  // 可选的错误说明，空字符串表示未提供
+  int32 code = 1; // 非零错误码
+  string message = 2; // 可选的错误说明，空字符串表示未提供
 }

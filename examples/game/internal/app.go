@@ -12,7 +12,6 @@ import (
 )
 
 func New() (*server.Server, func(), error) {
-
 	loc := redis.New(goredis.UniversalOptions{
 		Addrs: []string{"localhost:6379"},
 	}, "meta")

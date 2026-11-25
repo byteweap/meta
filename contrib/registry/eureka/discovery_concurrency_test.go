@@ -105,8 +105,10 @@ func TestEurekaDiscoverySnapshotsAndIsolation(t *testing.T) {
 			requireDiscoveryIDs(t, cached, err, ids...)
 		}
 
-		svc := &registry.ServiceInstance{ID: "registered", Name: "game", Version: "v1",
-			Endpoints: []string{"http://127.0.0.1:9001", "http://127.0.0.1:9002"}, Metadata: map[string]string{"zone": "original"}}
+		svc := &registry.ServiceInstance{
+			ID: "registered", Name: "game", Version: "v1",
+			Endpoints: []string{"http://127.0.0.1:9001", "http://127.0.0.1:9002"}, Metadata: map[string]string{"zone": "original"},
+		}
 		endpoints := r.Endpoints(svc)
 		if !reflect.DeepEqual(svc.Metadata, map[string]string{"zone": "original"}) {
 			t.Fatalf("Endpoints mutated caller metadata: %#v", svc.Metadata)

@@ -260,7 +260,7 @@ type IterCb[K comparable, V any] func(key K, v V)
 // IterCb 回调式遍历，读取成本最低
 func (m *ConcurrentMap[K, V]) IterCb(fn IterCb[K, V]) {
 	for idx := range m.shards {
-		shard := (m.shards)[idx]
+		shard := m.shards[idx]
 		shard.RLock()
 		for key, value := range shard.items {
 			fn(key, value)

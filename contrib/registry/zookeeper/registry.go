@@ -81,7 +81,6 @@ func (r *Registry) Deregister(ctx context.Context, service *registry.ServiceInst
 
 // GetService 从 zookeeper 获取服务
 func (r *Registry) GetService(_ context.Context, serviceName string) ([]*registry.ServiceInstance, error) {
-
 	instances, err, _ := r.group.Do(serviceName, func() (any, error) {
 		serviceNamePath := path.Join(r.opts.namespace, serviceName)
 		servicesID, _, err := r.conn.Children(serviceNamePath)
@@ -117,7 +116,6 @@ func (r *Registry) Watch(ctx context.Context, serviceName string) (registry.Watc
 
 // ensureName 确保节点存在，不存在则创建并写入数据
 func (r *Registry) ensureName(path string, data []byte, flags int32) error {
-
 	exists, stat, err := r.conn.Exists(path)
 	if err != nil {
 		return err
@@ -147,7 +145,6 @@ func (r *Registry) ensureName(path string, data []byte, flags int32) error {
 
 // reRegister 连接恢复后重新注册数据节点
 func (r *Registry) reRegister(path string, data []byte) {
-
 	sessionID := r.conn.SessionID()
 	ticker := time.NewTicker(time.Second)
 

@@ -139,7 +139,10 @@ func TestGateShutdownWaitsForDisconnectCleanup(t *testing.T) {
 			}
 			address, cancelRun := startShutdownConnectionGate(t, g)
 			t.Cleanup(unblock)
-			conn, _, err := websocket.DefaultDialer.Dial(address, nil)
+			conn, resp, err := websocket.DefaultDialer.Dial(address, nil)
+			if resp != nil {
+				require.NoError(t, resp.Body.Close())
+			}
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = conn.Close() })
 			awaitShutdownConnection(t, bro.online)
@@ -166,10 +169,10 @@ func TestGateShutdownWaitsForDisconnectCleanup(t *testing.T) {
 			require.True(t, unbindState.deadline)
 			go func() { second <- g.Stop(stopCtx) }()
 			select {
-			case <-first:
-				t.Fatal("first Stop returned before disconnect cleanup finished")
-			case <-second:
-				t.Fatal("concurrent Stop returned before disconnect cleanup finished")
+			case err := <-first:
+				t.Fatalf("first Stop returned before disconnect cleanup finished: %v", err)
+			case err := <-second:
+				t.Fatalf("concurrent Stop returned before disconnect cleanup finished: %v", err)
 			case <-time.After(20 * time.Millisecond):
 			}
 
@@ -244,8 +247,8 @@ func TestGateShutdownWaitsForLateHandshake(t *testing.T) {
 		return g.stopped
 	}, time.Second, time.Millisecond)
 	select {
-	case <-stopped:
-		t.Fatal("Stop returned before the admitted handshake finished")
+	case err := <-stopped:
+		t.Fatalf("Stop returned before the admitted handshake finished: %v", err)
 	case <-time.After(20 * time.Millisecond):
 	}
 	response := httptest.NewRecorder()

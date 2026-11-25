@@ -18,8 +18,8 @@ import (
 func newNamingClient() naming_client.INamingClient {
 	clientCfg := constant.ClientConfig{
 		UpdateCacheWhenEmpty: true,
-		//NamespaceId:  "zhaobin",
-		//BeatInterval: 5000,
+		// NamespaceId:  "zhaobin",
+		// BeatInterval: 5000,
 	}
 	serverCfgs := []constant.ServerConfig{
 		{
@@ -41,7 +41,6 @@ func newNamingClient() naming_client.INamingClient {
 }
 
 func main() {
-
 	// 1. nacos注册中心
 	nc := newNamingClient()
 	registry := nacos.New(nc)

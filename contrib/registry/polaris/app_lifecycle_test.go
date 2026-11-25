@@ -8,9 +8,10 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/byteweap/meta"
 	"github.com/polarismesh/polaris-go/api"
 	"github.com/polarismesh/polaris-go/pkg/model"
+
+	"github.com/byteweap/meta"
 )
 
 func TestPolarisAppFailedRegistrationPreservesExistingInstances(t *testing.T) {

@@ -217,7 +217,7 @@ func TestFilterWithContextConcurrent(t *testing.T) {
 		defer wg.Done()
 		tid := "world"
 		ctx := setTraceID(pctx, tid)
-		NewHelper((WithContext(ctx, l))).Info("done2")
+		NewHelper(WithContext(ctx, l)).Info("done2")
 	}()
 
 	wg.Wait()

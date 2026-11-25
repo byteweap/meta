@@ -12,5 +12,4 @@ var CmdRun = &cobra.Command{
 }
 
 func coreRun(c *cobra.Command, args []string) {
-
 }

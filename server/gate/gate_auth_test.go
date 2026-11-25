@@ -113,6 +113,9 @@ func TestGateAuthUsesVerifiedIdentityOnce(t *testing.T) {
 		"ws"+strings.TrimPrefix(ts.URL, "http")+"/ws?uid=99",
 		http.Header{"Authorization": {"Bearer valid-token"}},
 	)
+	if resp != nil {
+		require.NoError(t, resp.Body.Close())
+	}
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = conn.Close()

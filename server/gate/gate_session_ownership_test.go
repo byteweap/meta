@@ -155,9 +155,12 @@ func newOwnershipServer(t *testing.T, loc *ownershipLocator, node string, opts .
 
 func (s *ownershipServer) dial(t *testing.T, uid int64, name string) *websocket.Conn {
 	t.Helper()
-	conn, _, err := websocket.DefaultDialer.Dial(s.url, http.Header{
+	conn, resp, err := websocket.DefaultDialer.Dial(s.url, http.Header{
 		"X-Test-UID": {strconv.FormatInt(uid, 10)}, "X-Test-Connection": {name},
 	})
+	if resp != nil {
+		require.NoError(t, resp.Body.Close())
+	}
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 	return conn

@@ -11,5 +11,4 @@ var CmdNew = &cobra.Command{
 }
 
 func coreNew(c *cobra.Command, args []string) {
-
 }

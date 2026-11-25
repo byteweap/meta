@@ -155,9 +155,7 @@ func TestSubscribe_ContextCancelAutoUnsubscribe(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, b.Close()) })
 
-	var (
-		subject = "t.cancel.v1"
-	)
+	subject := "t.cancel.v1"
 
 	ctx, cancel := context.WithCancel(context.Background())
 	called := make(chan struct{}, 1)

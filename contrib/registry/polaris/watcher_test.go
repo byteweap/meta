@@ -9,9 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/byteweap/meta/component/registry"
 	"github.com/polarismesh/polaris-go/api"
 	"github.com/polarismesh/polaris-go/pkg/model"
+
+	"github.com/byteweap/meta/component/registry"
 )
 
 func newPolarisWatcherForTest(t *testing.T, ctx context.Context, initial ...model.Instance) (registry.Watcher, chan model.SubScribeEvent) {

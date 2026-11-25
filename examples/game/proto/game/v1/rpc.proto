@@ -1,5 +1,5 @@
 syntax = "proto3";
-package game;
+package game.v1;
 
 option go_package = "github.com/byteweap/meta/examples/game/internal/pb;pb";
 

@@ -199,7 +199,7 @@ func (client *Client) readLoop() {
 			return
 		}
 		switch message.GetKind() {
-		case envelope.MsgType_RESPONSE:
+		case envelope.MsgType_MSG_TYPE_RESPONSE:
 			seq := message.GetHeader().GetSeq()
 			client.mu.Lock()
 			if response := client.pending[seq]; response != nil {
@@ -207,7 +207,7 @@ func (client *Client) readLoop() {
 				response <- message
 			}
 			client.mu.Unlock()
-		case envelope.MsgType_PUSH:
+		case envelope.MsgType_MSG_TYPE_PUSH:
 			select {
 			case client.pushes <- message:
 			default:

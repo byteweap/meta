@@ -51,7 +51,7 @@ func TestPushFollowsCurrentGate(t *testing.T) {
 		require.Equal(t, cluster.DeliveryPush, o.Header.Get(cluster.FieldNameDelivery))
 		require.NotContains(t, o.Header, cluster.FieldNameSessionID)
 		require.NoError(t, proto.Unmarshal(data, &frame))
-		require.Equal(t, envelope.MsgType_PUSH, frame.GetKind())
+		require.Equal(t, envelope.MsgType_MSG_TYPE_PUSH, frame.GetKind())
 		require.Equal(t, "game", frame.GetService())
 		require.Nil(t, frame.GetError())
 		require.NotNil(t, frame.GetHeader())

@@ -19,7 +19,7 @@ import (
 const (
 	clientOverloadReplyTimeout = 100 * time.Millisecond
 
-	// 字段编号由 idl/envelope/envelope.proto 中的 ClientEnvelope 定义
+	// 字段编号由 idl/envelope/v1/envelope.proto 中的 ClientEnvelope 定义
 	clientEnvelopeHeaderField  = 1
 	clientEnvelopeServiceField = 2
 )

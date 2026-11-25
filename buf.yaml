@@ -1,0 +1,7 @@
+version: v2
+modules:
+  - path: idl
+  - path: examples/game/proto
+lint:
+  use:
+    - STANDARD

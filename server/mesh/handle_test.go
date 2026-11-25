@@ -85,7 +85,7 @@ func TestClientHandlerResponse(t *testing.T) {
 			require.Equal(t, cluster.DeliveryResponse, reply.Header.Get(cluster.FieldNameDelivery))
 			var out envelope.ServerEnvelope
 			require.NoError(t, proto.Unmarshal(reply.Data, &out))
-			require.Equal(t, envelope.MsgType_RESPONSE, out.Kind)
+			require.Equal(t, envelope.MsgType_MSG_TYPE_RESPONSE, out.Kind)
 			require.Equal(t, "game", out.Service)
 			require.Equal(t, h.Seq, out.Header.Seq)
 			require.Equal(t, h.Cmd, out.Header.Cmd)

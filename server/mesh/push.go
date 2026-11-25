@@ -63,7 +63,7 @@ func (m *Mesh) Push(ctx context.Context, uid int64, cmd, version uint32, payload
 	data, err := proto.Marshal(&envelope.ServerEnvelope{
 		Header:  &envelope.Header{Cmd: cmd, Version: version, SentAtUnixMs: time.Now().UnixMilli()},
 		Service: m.appName,
-		Kind:    envelope.MsgType_PUSH,
+		Kind:    envelope.MsgType_MSG_TYPE_PUSH,
 		Payload: body,
 	})
 	if err != nil {

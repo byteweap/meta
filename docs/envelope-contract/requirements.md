@@ -42,3 +42,15 @@
 | AC-10 | `make envelope` 和 `buf generate` 使用同一模板，每次生成选用 Buf Schema Registry 上最新的 Go 插件。外层协议的 Go 绑定输出至 `envelope/envelope.pb.go`。 |
 
 旧客户端和服务端可继续交换普通 Protobuf 二进制帧。重新编译的调用方使用新的 Go 枚举常量。使用 Protobuf 全限定名、`Any` 类型 URL 或 ProtoJSON 枚举字符串的调用方需要同步迁移。
+
+## 2026-11-25 统一 Protobuf 工具链
+
+用户确认立即迁移游戏示例的 Protobuf 工作流。沿用 Level 2 追溯。
+
+| 验收项 | 要求 |
+| --- | --- |
+| AC-11 | 根目录的 `buf generate`、`buf lint` 和 `buf build` 覆盖外层协议和游戏示例。两者共用 AC-10 的生成模板。 |
+| AC-12 | `make -C examples/game proto` 使用 Buf 单独生成游戏绑定，`make envelope` 仍单独生成外层绑定。移除游戏示例的 Docker 生成脚本。 |
+| AC-13 | 游戏示例使用 `package game.v1`，IDL 相对模块根位于 `game/v1/`，直接通过 Buf `STANDARD` 检查。保留字段编号和类型、Go 导入路径、Go 消息类型名和绑定生成目录。 |
+
+用户随后确认由 IDL 满足包目录和版本规则，移除原有 lint 例外。依赖旧 Protobuf 全限定名、`Any` 类型 URL 或描述符文件路径的调用方需迁移到 `game.v1` 和 `game/v1/`。

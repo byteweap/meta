@@ -446,16 +446,24 @@ func EnterGame(ctx *mesh.Context, req *EnterGameReq) {
 ## 开发命令
 
 ```bash
-make check      # 逐模块构建整个项目，使用只读依赖模式
-make test       # 运行所有测试
-make tidy       # 整理所有 Go module
-make envelope   # 根据 idl/envelope/v1/envelope.proto 重新生成 Go 绑定
-buf generate    # 使用 Buf Schema Registry 上最新的 Go 插件生成 Go 绑定
-buf lint        # 按 STANDARD 规则检查 idl 下的 Protobuf 定义
-make lint       # 运行 golangci-lint
+make check                  # 逐模块构建整个项目，使用只读依赖模式
+make test                   # 运行所有测试
+make tidy                   # 整理所有 Go module
+buf generate                # 重新生成外层协议和游戏示例的 Go 绑定
+make envelope               # 只重新生成外层协议的 Go 绑定
+make -C examples/game proto # 只重新生成游戏示例的 Go 绑定
+buf lint                    # 按 STANDARD 规则检查两个协议模块
+buf build                   # 编译两个协议模块
+make lint                   # 运行 golangci-lint
 ```
 
-`make envelope` 和 `buf generate` 共用 [生成模板](buf.gen.yaml)。重新生成 Go 绑定需要安装 Buf CLI，并能连接 `buf.build`。
+从仓库根目录运行上述 Buf 命令。`idl/` 和 `examples/game/proto/` 都按 `STANDARD` 规则检查。[Buf workspace](buf.yaml)
+
+游戏示例使用 `game.v1`，IDL 路径以 `game/v1/` 开头，Go 绑定仍位于 `examples/game/internal/pb/`。从旧版升级时，依赖 Protobuf 全限定名、`Any` 类型 URL 或描述符文件路径的代码需更新。普通 Protobuf 二进制消息保持兼容。[事件协议](examples/game/proto/game/v1/event.proto) · [RPC 协议](examples/game/proto/game/v1/rpc.proto)
+
+旧 Proto 导入路径 `event.proto`、`rpc.proto` 分别改为 `game/v1/event.proto`、`game/v1/rpc.proto`。直接引用 Go 描述符变量的代码也需将 `File_event_proto`、`File_rpc_proto` 分别更新为 `File_game_v1_event_proto`、`File_game_v1_rpc_proto`。
+
+三个生成命令共用 [生成模板](buf.gen.yaml)。生成需要安装 Buf CLI，并将协议描述发送到 `buf.build`，调用 Buf Schema Registry 上最新的 Go 插件。Lint 和协议编译可在本地运行。
 
 Windows 环境也提供了对应脚本：
 

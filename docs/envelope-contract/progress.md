@@ -45,3 +45,23 @@
 生成模板最初使用本机 `protoc-gen-go v1.36.12` 验证，输出为 `envelope/envelope.pb.go`。使用同一插件对比 Buf 和 `protoc` 的生成结果，差异仅在文件头的编译器版本注释。
 
 AC-10 的 [生成模板](../../buf.gen.yaml) 使用 Buf Schema Registry 上的最新 Go 插件。`make envelope` 调用同一模板，并限定外层协议文件。[开发命令](../../README.md#开发命令) 已说明 Buf CLI 和网络要求。已通过 `buf lint`、目标文件的 `buf build` 和 `make -n envelope`。远端生成及其输出校验等待协议描述外发授权。
+
+## 2026-11-25 统一 Protobuf 工具链的初次迁移
+
+| 验收项 | 实施与证据 |
+| --- | --- |
+| AC-11 | [Buf workspace](../../buf.yaml) 包含两个模块。`buf ls-files` 列出全部 3 个协议文件。根目录的 `buf lint`、`buf build` 以及两个模块的 `buf format --diff --exit-code` 均通过。 |
+| AC-12 | [示例 Makefile](../../examples/game/Makefile) 改用 Buf，移除了两份 Docker 脚本。在临时副本中把现有模板的远端插件替换为本地 `protoc-gen-go v1.36.12`，分别运行 `make envelope`、`make -C examples/game proto` 和 `buf generate`，按预期输出 1、2、3 个文件。全部 Go 绑定与仓库版本的差异仅在工具版本注释。 |
+| AC-13 | 与迁移前的 `HEAD` 比较，两个模块的 Protobuf 描述符集合逐字节一致，`buf breaking` 通过。在临时副本中新增使用 `package game` 的文件时，Buf 仍报告包目录和版本规则违规，验证例外只覆盖已有文件。 |
+
+根模块及 `examples/game` 的 `go test -mod=readonly ./...`、`make check`（21 个模块）通过。[开发命令](../../README.md#开发命令) 已同步。实现和本地验证完成。沿用 AC-10 的 BSR 插件配置，远端生成涉及向 `buf.build` 发送协议描述，本次未执行远端调用。
+
+## 2026-11-25 按 STANDARD 规则调整游戏协议
+
+用户要求移除初次迁移中的 lint 例外。更新后的 AC-13 由 [事件协议](../../examples/game/proto/game/v1/event.proto) 和 [RPC 协议](../../examples/game/proto/game/v1/rpc.proto) 使用 `game.v1` 包名及 `game/v1/` 路径实现。[Buf 配置](../../buf.yaml) 只启用 `STANDARD`，两个模块的 `buf lint`、`buf build` 和格式检查均通过。
+
+对比迁移前后的描述符，移除源位置信息并还原两处包名和文件路径后，描述符完全一致。默认 `FILE` 模式的 `buf breaking` 报告两条预期的 `FILE_NO_DELETE`，对应旧的 `event.proto` 和 `rpc.proto`。依赖 Protobuf 全限定名、`Any` 类型 URL 和旧描述符文件路径的调用方需要迁移，普通 Protobuf 二进制消息保持兼容。[开发命令和迁移说明](../../README.md#开发命令)
+
+使用 Buf 和本地 `protoc-gen-go v1.36.12` 通过 `make -C examples/game proto` 重生成两份 Go 绑定。默认 BSR 生成未实跑。根模块和游戏示例测试、`make check` 以及 `git diff --check` 均通过。
+
+复核了仓库内的 Proto 导入、游戏事件与 RPC 处理器，以及直接引用 Protobuf 全限定名、`Any` 类型 URL 或 Go 描述符变量的代码。业务调用均使用原有 Go 消息类型，仓库内没有需要改写的旧引用。已补全 [迁移说明](../../README.md#开发命令) 中 Proto 导入路径和 Go 描述符变量的对应关系。

@@ -328,7 +328,7 @@ func TestGateSessionReplyRejectsOldConnectionWithSameSequence(t *testing.T) {
 		require.Equal(t, sessionID, cluster.GetSessionIDBy(reply.Header))
 		srv.gate.handlePubSubMessage(reply)
 	}
-	push := &envelope.ServerEnvelope{Kind: envelope.MsgType_PUSH, Header: &envelope.Header{Cmd: 2}, Service: "game"}
+	push := &envelope.ServerEnvelope{Kind: envelope.MsgType_MSG_TYPE_PUSH, Header: &envelope.Header{Cmd: 2}, Service: "game"}
 	pushData, err := proto.Marshal(push)
 	require.NoError(t, err)
 	pushHeader := cluster.BuildHeader(42, cluster.EventBusiness, "", "game", "gate")
@@ -337,7 +337,7 @@ func TestGateSessionReplyRejectsOldConnectionWithSameSequence(t *testing.T) {
 
 	require.NoError(t, current.SetReadDeadline(time.Now().Add(time.Second)))
 	for _, want := range []*envelope.ServerEnvelope{
-		{Kind: envelope.MsgType_RESPONSE, Header: &envelope.Header{Seq: 7, Cmd: 1, Version: 1}, Service: "game"},
+		{Kind: envelope.MsgType_MSG_TYPE_RESPONSE, Header: &envelope.Header{Seq: 7, Cmd: 1, Version: 1}, Service: "game"},
 		push,
 	} {
 		kind, data, readErr := current.ReadMessage()
@@ -345,7 +345,7 @@ func TestGateSessionReplyRejectsOldConnectionWithSameSequence(t *testing.T) {
 		require.Equal(t, websocket.BinaryMessage, kind)
 		got := &envelope.ServerEnvelope{}
 		require.NoError(t, proto.Unmarshal(data, got))
-		if got.GetKind() == envelope.MsgType_RESPONSE {
+		if got.GetKind() == envelope.MsgType_MSG_TYPE_RESPONSE {
 			got.Header.SentAtUnixMs = 0
 		}
 		require.True(t, proto.Equal(want, got), "want %v, got %v", want, got)

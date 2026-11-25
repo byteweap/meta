@@ -43,7 +43,7 @@ Meta 是一个轻量、可插拔、面向长连接游戏/实时业务的 Go 服�
 │   └── log/                    # 日志抽象
 ├── contrib/                    # 可选组件实现，按独立模块组织
 ├── encoding/                   # json/proto/msgpack/yaml/toml/xml 编解码器
-├── envelope/                   # 由 idl/envelope 生成的 protobuf 消息
+├── envelope/                   # 由 idl/envelope/v1 生成的 Protobuf 消息
 ├── internal/cluster/           # 集群 subject、header、系统事件定义
 ├── pkg/                        # 通用工具包
 ├── examples/                   # gate、game、gate-client 示例
@@ -129,7 +129,7 @@ message ClientEnvelope {
 3. 目标服务的全部可用实例都声明无状态时，Gate 直接从本地快照选点，跳过玩家定位。其他服务通过 `locator.Node(ctx, uid, service)` 查询玩家绑定。已绑定时只发给快照中的原实例，绑定失效则回复 503。使用选择器时以 UID 为 key。
 4. Gate 将客户端的原始 Protobuf 帧发往 `<prefix>.<gateName>.<service>.<nodeID>`，并在 Broker 消息头携带 uid、事件类型、回复地址、来源与目标服务，以及读取请求的连接的 `session_id`。
 
-注册中心查询、监听初始化、定位、选点或发布失败时，Gate 在原 WebSocket 连接上回复 503。Gate 的 404 和 503 均为 `RESPONSE`，来源为 Gate，回填原 `seq/cmd/version`，包括 `seq=0`。组件错误详情记入服务端日志。发布成功后若收不到业务响应，客户端通过请求截止时间结束等待。
+注册中心查询、监听初始化、定位、选点或发布失败时，Gate 在原 WebSocket 连接上回复 503。Gate 的 404 和 503 均为 `MSG_TYPE_RESPONSE`，来源为 Gate，回填原 `seq/cmd/version`，包括 `seq=0`。组件错误详情记入服务端日志。发布成功后若收不到业务响应，客户端通过请求截止时间结束等待。
 
 当同一服务的任意实例都能处理该服务的请求时，可在 `meta.New` 中传入 `meta.Metadata(map[string]string{registry.MetadataStateless: "true"})`，按需在同一个 map 中提供其他元数据。该声明作用于整个服务，注册中心需保留 `stateless`，Gate 随发现快照更新转发方式。需要玩家绑定的业务使用默认方式，房间归属由业务服务管理。
 
@@ -139,7 +139,7 @@ Mesh 的 `OkResp` / `ErrResp` 在 Broker 头标记 `delivery=response`，并回�
 
 滚动升级时默认允许缺少投递标记或会话 ID 的旧响应，此时仍存在旧回包误投风险。先升级 Gate 和 Mesh，迁移自定义发布者，再启用 `gate.StrictSessionDelivery(true)`：自定义响应必须同时设置 `delivery=response` 和原请求的 `session_id`，自定义推送必须设置 `delivery=push`。已有 Broker 适配器须保留这些头。该校验不撤销旧请求的业务操作，也不提供跨网关踢线。详见[迁移与回退](docs/session-reply-isolation/decision.md)。
 
-下行 `ServerEnvelope` 也必须包含 `header`，其 `service` 是来源服务，`kind` 区分 `RESPONSE` 和 `PUSH`。成功响应与推送均省略 `error`；失败响应携带 `error.code`（非零错误码），可附带 `error.message`。业务消息体的选型规则见 [外层协议定义](idl/envelope/envelope.proto)。
+下行 `ServerEnvelope` 也必须包含 `header`，其 `service` 是来源服务，`kind` 区分 `MSG_TYPE_RESPONSE` 和 `MSG_TYPE_PUSH`。成功响应与推送均省略 `error`；失败响应携带 `error.code`（非零错误码），可附带 `error.message`。业务消息体的选型规则见 [外层协议定义](idl/envelope/v1/envelope.proto)。
 
 `header.seq` 用于请求与响应关联，响应回填原值；`0` 表示无需关联。框架不要求它递增，也不据此排序或去重。`header.sent_at_unix_ms` 是发送方的 Unix 毫秒时间戳，`0` 表示未提供。响应由生成它的 Gate 或 Mesh 填写发送时间，框架不依赖客户端时钟判断消息顺序。
 
@@ -214,7 +214,7 @@ Mesh 用 UID 和 Gate 的逻辑服务名查询当前会话。默认服务名为 
 
 - 用户没有在线会话时，可用 `errors.Is(err, mesh.ErrUserOffline)` 判断。定位、编码和 Broker 发布错误返回给调用方。
 - 定位或编码耗尽调用预算时，Mesh 跳过发布。调用方主动取消会通知定位器和 Broker，已进入的网络 I/O 何时返回取决于适配器。
-- 返回 `nil` 表示 Broker 适配器接受了发布。使用 NATS 时，此刻消息可能仍在发送缓冲区。客户端收到的 `PUSH` 帧通过 `Pushes()` 分发，`seq` 为 0，来源为 Mesh 服务名。
+- 返回 `nil` 表示 Broker 适配器接受了发布。使用 NATS 时，此刻消息可能仍在发送缓冲区。客户端收到的 `MSG_TYPE_PUSH` 帧通过 `Pushes()` 分发，`seq` 为 0，来源为 Mesh 服务名。
 - 推送按 UID 投递给目标 Gate 的本地连接。若用户在定位后迁往另一个 Gate，本次推送可能丢失，也可能被仍存在的旧连接收到。下一次推送会重新定位。
 
 ### 服务间 RPC
@@ -293,6 +293,8 @@ data, tip, code, err := m.RequestService(ctx, "room", "create", "v1", payload)
 - `envelope.ClientEnvelope` 封装上行请求，`envelope.ServerEnvelope` 封装下行响应或推送。
 - `broker.Header`：集群内部元数据，例如 uid、event、reply、fromService、toService。
 - `cluster.Subject`：broker subject 约定。
+
+外层 Protobuf 包名为 `envelope.v1`，Go 导入路径仍为 `github.com/byteweap/meta/envelope`。Proto 文件以 `idl` 为导入根，使用 `import "envelope/v1/envelope.proto";`。从旧版升级时，更新 Go 枚举常量和默认 ProtoJSON 枚举字符串，并同步依赖 Protobuf 描述符、全限定名或 `Any` 类型 URL 的代码。普通 Protobuf 二进制帧保持兼容。
 
 subject 格式：
 
@@ -447,9 +449,13 @@ func EnterGame(ctx *mesh.Context, req *EnterGameReq) {
 make check      # 逐模块构建整个项目，使用只读依赖模式
 make test       # 运行所有测试
 make tidy       # 整理所有 Go module
-make envelope   # 根据 idl/envelope/envelope.proto 重新生成 protobuf
+make envelope   # 根据 idl/envelope/v1/envelope.proto 重新生成 Go 绑定
+buf generate    # 使用 Buf Schema Registry 上最新的 Go 插件生成 Go 绑定
+buf lint        # 按 STANDARD 规则检查 idl 下的 Protobuf 定义
 make lint       # 运行 golangci-lint
 ```
+
+`make envelope` 和 `buf generate` 共用 [生成模板](buf.gen.yaml)。重新生成 Go 绑定需要安装 Buf CLI，并能连接 `buf.build`。
 
 Windows 环境也提供了对应脚本：
 

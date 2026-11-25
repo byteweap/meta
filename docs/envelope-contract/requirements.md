@@ -30,3 +30,15 @@
 | AC-07 | 保留 `seq`、`cmd`、`version` 和 `ClientEnvelope.header`。本次仅分析 `seq` 在业务有序性上的用途，不引入单调校验、排队、重放或重连处理变更。 |
 
 普通 Protobuf 二进制帧保持兼容；生成的字段和类型名、反射名以及默认 ProtoJSON 键随 IDL 改名。已有调用方需要按新名称迁移。
+
+## 2026-11-25 Protobuf 命名规范
+
+用户要求通过修改协议定义解决 Buf lint 警告。沿用外层协议的 Level 2 追溯。
+
+| 验收项 | 要求 |
+|---|---|
+| AC-08 | 外层协议使用 `envelope.v1` 包名和与包名匹配的目录。枚举值使用 `MSG_TYPE_` 前缀，零值使用 `_UNSPECIFIED` 后缀。通过 Buf `STANDARD` 检查。 |
+| AC-09 | 保留字段编号、字段类型、枚举数值和 Go 导入路径。同步生成命令、Go 绑定、框架调用方、示例及文档。 |
+| AC-10 | `make envelope` 和 `buf generate` 使用同一模板，每次生成选用 Buf Schema Registry 上最新的 Go 插件。外层协议的 Go 绑定输出至 `envelope/envelope.pb.go`。 |
+
+旧客户端和服务端可继续交换普通 Protobuf 二进制帧。重新编译的调用方使用新的 Go 枚举常量。使用 Protobuf 全限定名、`Any` 类型 URL 或 ProtoJSON 枚举字符串的调用方需要同步迁移。

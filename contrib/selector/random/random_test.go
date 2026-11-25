@@ -95,3 +95,19 @@ func TestRandomSelector_Select_WithFilter(t *testing.T) {
 		t.Fatalf("expected node-b, got %v", got.ID())
 	}
 }
+
+func TestFilteredSelectionRebuildsWeights(t *testing.T) {
+	a := selector.NewNode("a", "svc", "1", nil)
+	b := selector.NewNode("b", "svc", "1", map[string]string{"weight": "+Inf"})
+	c := selector.NewNode("c", "svc", "1", nil)
+	rs := New()
+	rs.Update([]selector.Node{a, b, c})
+	got, err := rs.Select("", nil, func(nodes []selector.Node) []selector.Node { return nodes[:2] })
+	if err != nil || got != b {
+		t.Fatalf("selection = %v, %v, want the last node at the cumulative upper bound", got, err)
+	}
+	if got, err = rs.Select("", func([]selector.Node) []selector.Node { return nil }); got != nil ||
+		!errors.Is(err, selector.ErrNoAvailableNode) {
+		t.Fatalf("all filtered = %v, %v", got, err)
+	}
+}

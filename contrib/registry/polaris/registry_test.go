@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -411,5 +412,82 @@ func TestPolarisConcurrentRequestsDoNotShareOptions(t *testing.T) {
 	wg.Wait()
 	if registrations.Load() != 48 || removals.Load() != 48 || queries.Load() != 24 || !maps.Equal(metadata, service.Metadata) || service.Version != "v1" {
 		t.Fatalf("concurrent operations changed input or lost requests: registrations=%d removals=%d queries=%d service=%+v", registrations.Load(), removals.Load(), queries.Load(), service)
+	}
+}
+
+func TestPolarisLookupAndRemovalFailures(t *testing.T) {
+	failure := errors.New("SDK unavailable")
+	consumer := &fakePolarisConsumer{getAll: func(*api.GetAllInstancesRequest) (*model.InstancesResponse, error) {
+		return nil, failure
+	}}
+	r := NewRegistry(nil, consumer)
+	if r.ID() != "polaris" {
+		t.Fatalf("unexpected registry ID: %q", r.ID())
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	for _, check := range []struct {
+		reg  *Registry
+		ctx  context.Context
+		name string
+		want error
+	}{
+		{r, canceled, "game", context.Canceled},
+		{r, t.Context(), "", nil},
+		{r, t.Context(), "game", failure},
+		{NewRegistry(nil, consumer, WithNamespace("")), t.Context(), "game", nil},
+	} {
+		instances, err := check.reg.GetService(check.ctx, check.name)
+		if instances != nil || err == nil || (check.want != nil && !errors.Is(err, check.want)) {
+			t.Fatalf("GetService(%q) = %v, %v, want failure %v", check.name, instances, err, check.want)
+		}
+	}
+	if err := NewRegistry(nil, nil, WithNamespace("")).Deregister(t.Context(), polarisTestService()); err == nil {
+		t.Fatal("Deregister accepted an empty namespace")
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	calls := 0
+	provider := &fakePolarisProvider{deregister: func(*api.InstanceDeRegisterRequest) error {
+		calls++
+		cancel()
+		return failure
+	}}
+	if err := NewRegistry(provider, consumer).Deregister(ctx, polarisTestService()); calls != 1 ||
+		!errors.Is(err, context.Canceled) || !errors.Is(err, failure) {
+		t.Fatalf("Deregister returned %v after %d calls", err, calls)
+	}
+}
+
+func TestPolarisRejectsEmptyRegistrationAndAppliesHealthOptions(t *testing.T) {
+	provider := &fakePolarisProvider{register: func(req *api.InstanceRegisterRequest, _ bool) (*model.InstanceRegisterResponse, error) {
+		if req.Healthy == nil || *req.Healthy || req.Isolate == nil || !*req.Isolate {
+			t.Fatalf("unexpected health options: %+v", req)
+		}
+		return nil, nil
+	}}
+	err := NewRegistry(provider, nil, WithHealthy(false), WithIsolate(true)).Register(t.Context(), polarisTestService())
+	if err == nil || !strings.Contains(err.Error(), "empty registration response") {
+		t.Fatalf("Register returned %v", err)
+	}
+}
+
+func TestPolarisRejectsInvalidTimeoutAndDropsLateLookupResponse(t *testing.T) {
+	r := NewRegistry(nil, nil, WithTimeout(0))
+	if _, err := r.GetService(t.Context(), "game"); err == nil {
+		t.Fatal("GetService accepted a zero timeout")
+	}
+	if err := r.Deregister(t.Context(), polarisTestService()); err == nil {
+		t.Fatal("Deregister accepted a zero timeout")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	consumer := &fakePolarisConsumer{getAll: func(*api.GetAllInstancesRequest) (*model.InstancesResponse, error) {
+		cancel()
+		return &model.InstancesResponse{Instances: []model.Instance{newPolarisTestInstance("sdk", "app")}}, nil
+	}}
+	if instances, err := NewRegistry(nil, consumer).GetService(ctx, "game"); instances != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("late GetService response = %v, %v", instances, err)
 	}
 }

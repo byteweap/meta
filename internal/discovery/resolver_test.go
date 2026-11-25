@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -206,4 +207,177 @@ func TestWatcherStopPanicBecomesCleanupError(t *testing.T) {
 	_, err := r.Resolve(t.Context(), "room")
 	require.ErrorContains(t, err, "watch stop failed")
 	require.ErrorContains(t, r.Close(), "watch stop failed")
+}
+
+type fixedSelector struct {
+	selector.Selector
+	node selector.Node
+	err  error
+}
+
+func (s fixedSelector) Select(string, ...selector.Filter) (selector.Node, error) {
+	return s.node, s.err
+}
+
+func TestServiceSelectionRejectsStaleAndUnavailableNodes(t *testing.T) {
+	failure := errors.New("selection failed")
+	for _, test := range []struct {
+		sel  selector.Selector
+		want error
+	}{
+		{fixedSelector{err: failure}, failure},
+		{fixedSelector{node: selector.NewNode("stale", "room", "v1", nil)}, selector.ErrNoAvailableNode},
+		{fixedSelector{}, selector.ErrNoAvailableNode},
+	} {
+		s := &Service{Selector: test.sel, subjects: map[string]string{"live": "room.live"}}
+		subject, err := s.SelectSubject("42")
+		require.Empty(t, subject)
+		require.ErrorIs(t, err, test.want)
+	}
+}
+
+type openingRegistry struct {
+	registry.Registry
+	get   func(context.Context) ([]*registry.ServiceInstance, error)
+	watch func(context.Context) (registry.Watcher, error)
+}
+
+func (r openingRegistry) GetService(ctx context.Context, _ string) ([]*registry.ServiceInstance, error) {
+	return r.get(ctx)
+}
+
+func (r openingRegistry) Watch(ctx context.Context, _ string) (registry.Watcher, error) {
+	return r.watch(ctx)
+}
+
+func TestResolverRejectsCanceledAndInvalidLookups(t *testing.T) {
+	r := New(t.Context(), nil, nil, nil)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := r.Resolve(ctx, "room")
+	require.ErrorIs(t, err, context.Canceled)
+
+	_, err = r.Resolve(t.Context(), "bad topic")
+	require.ErrorIs(t, err, ErrNotFound)
+	require.NoError(t, r.Close())
+	_, err = r.Resolve(t.Context(), "room")
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestResolverReusesCacheAndClearsItWhenWatchEnds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		unblock := make(chan struct{})
+		stopped := make(chan struct{})
+		instance := &registry.ServiceInstance{Name: "room", ID: "live"}
+		var watchContext context.Context
+		reg := openingRegistry{
+			get: func(context.Context) ([]*registry.ServiceInstance, error) {
+				return []*registry.ServiceInstance{instance}, nil
+			},
+			watch: func(ctx context.Context) (registry.Watcher, error) {
+				watchContext = ctx
+				return resolverTestWatcher{
+					next: func() ([]*registry.ServiceInstance, error) {
+						<-unblock
+						return nil, nil
+					},
+					stop: func() error { close(stopped); return nil },
+				}, nil
+			},
+		}
+		r := New(t.Context(), reg, func() selector.Selector { return resolverTestSelector{} }, func(_, id string) string { return id })
+		service, err := r.Resolve(t.Context(), "room")
+		require.NoError(t, err)
+		cached, err := r.Resolve(t.Context(), "room")
+		require.NoError(t, err)
+		require.Same(t, service, cached)
+		require.Equal(t, "live", service.Subject("live"))
+		require.NoError(t, watchContext.Err())
+
+		closeDone := make(chan error, 1)
+		go func() { closeDone <- r.Close() }()
+		<-stopped
+		close(unblock)
+		require.NoError(t, <-closeDone)
+		require.Nil(t, r.Cached("room"))
+		require.Empty(t, service.Subject("live"))
+	})
+}
+
+func TestResolverOpensWatchTransactionally(t *testing.T) {
+	failure, stopFailure := errors.New("discovery failed"), context.DeadlineExceeded
+	instance := &registry.ServiceInstance{Name: "room", ID: "live"}
+	for _, tc := range []struct {
+		name string
+		mode string
+		want error
+	}{
+		{"first query fails", "first-error", failure},
+		{"first query cancels", "first-cancel", context.Canceled},
+		{"watch error", "watch-error", failure},
+		{"watch and cleanup error", "watch-close-error", failure},
+		{"watch cancels", "watch-cancel", context.Canceled},
+		{"second query fails", "second-error", failure},
+		{"second query cancels", "second-cancel", context.Canceled},
+		{"initial snapshot became empty", "empty", ErrNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			queryCount := 0
+			var stops atomic.Int32
+			watcher := resolverTestWatcher{stop: func() error {
+				stops.Add(1)
+				if tc.mode == "watch-close-error" {
+					return stopFailure
+				}
+				return nil
+			}}
+			reg := openingRegistry{
+				get: func(context.Context) ([]*registry.ServiceInstance, error) {
+					queryCount++
+					prefix := "first"
+					if queryCount > 1 {
+						prefix = "second"
+					}
+					switch tc.mode {
+					case prefix + "-error":
+						return nil, failure
+					case prefix + "-cancel":
+						cancel()
+					case "empty":
+						if queryCount > 1 {
+							return nil, nil
+						}
+					}
+					return []*registry.ServiceInstance{instance}, nil
+				},
+				watch: func(context.Context) (registry.Watcher, error) {
+					switch tc.mode {
+					case "watch-error":
+						return nil, failure
+					case "watch-close-error":
+						return watcher, failure
+					case "watch-cancel":
+						cancel()
+					}
+					return watcher, nil
+				},
+			}
+			r := New(ctx, reg, func() selector.Selector { return resolverTestSelector{} }, func(_, id string) string { return id })
+			service, err := r.open(ctx, "room", cancel)
+			require.ErrorIs(t, err, tc.want)
+			if service != nil {
+				require.NoError(t, service.stop())
+			}
+			if tc.mode == "watch-close-error" {
+				require.ErrorIs(t, err, stopFailure)
+				require.ErrorIs(t, r.Close(), stopFailure)
+				require.EqualValues(t, 1, stops.Load())
+			} else {
+				require.NoError(t, r.Close())
+			}
+			require.Nil(t, r.Cached("room"))
+		})
+	}
 }

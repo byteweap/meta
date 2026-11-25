@@ -12,11 +12,15 @@ import (
 )
 
 func New() (*server.Server, func(), error) {
+	return newApplication(nats.New)
+}
+
+func newApplication(connectBroker func(...nats.Option) (*nats.Broker, error)) (*server.Server, func(), error) {
 	loc := redis.New(goredis.UniversalOptions{
 		Addrs: []string{"localhost:6379"},
 	}, "meta")
 
-	bro, err := nats.New(
+	bro, err := connectBroker(
 		nats.URLs("nats://localhost:4222"),
 	)
 	if err != nil {

@@ -66,3 +66,24 @@ func TestLogger(t *testing.T) {
 		}
 	}
 }
+
+func TestLoggerRespectsThresholdMessageKeyAndFatalHook(t *testing.T) {
+	syncer := &testWriteSyncer{}
+	cfg := zapcore.EncoderConfig{MessageKey: "message", LevelKey: "level", EncodeLevel: zapcore.LowercaseLevelEncoder}
+	core := zapcore.NewCore(zapcore.NewJSONEncoder(cfg), syncer, zap.InfoLevel)
+	logger := NewLogger(zap.New(core, zap.WithFatalHook(zapcore.WriteThenGoexit)))
+	WithMessageKey("text")(logger)
+	if err := logger.Log(log.LevelDebug, "text", "suppressed"); err != nil || len(syncer.output) != 0 {
+		t.Fatalf("debug log returned %v, output=%v", err, syncer.output)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = logger.Log(log.LevelFatal, "text", "closing")
+	}()
+	<-done
+	want := "{\"level\":\"fatal\",\"message\":\"closing\"}\n"
+	if len(syncer.output) != 1 || syncer.output[0] != want {
+		t.Fatalf("fatal log output = %v, want %s", syncer.output, want)
+	}
+}

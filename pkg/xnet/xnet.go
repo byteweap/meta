@@ -76,7 +76,11 @@ func ExtractPort(addr net.Addr) (int, error) {
 
 // InternalIP 获取内网IP地址
 func InternalIP() (string, error) {
-	ifaces, err := net.Interfaces()
+	return internalIP(net.Interfaces, func(iface net.Interface) ([]net.Addr, error) { return iface.Addrs() })
+}
+
+func internalIP(interfaces func() ([]net.Interface, error), addresses func(net.Interface) ([]net.Addr, error)) (string, error) {
+	ifaces, err := interfaces()
 	if err != nil {
 		return "", err
 	}
@@ -87,10 +91,11 @@ func InternalIP() (string, error) {
 			continue
 		}
 
-		next, preferred, err := ifaceInternalIP(iface)
+		addrs, err := addresses(iface)
 		if err != nil {
 			return "", err
 		}
+		next, preferred := ifaceInternalIP(addrs)
 		if preferred {
 			return next, nil
 		}
@@ -109,12 +114,7 @@ func isInternalIface(iface net.Interface) bool {
 	return iface.Flags&net.FlagUp != 0 && iface.Flags&net.FlagLoopback == 0
 }
 
-func ifaceInternalIP(iface net.Interface) (ip string, preferred bool, err error) {
-	addrs, err := iface.Addrs()
-	if err != nil {
-		return "", false, err
-	}
-
+func ifaceInternalIP(addrs []net.Addr) (ip string, preferred bool) {
 	for _, addr := range addrs {
 		ipnet, ok := addrIP(addr)
 		if !ok {
@@ -126,14 +126,14 @@ func ifaceInternalIP(iface net.Interface) (ip string, preferred bool, err error)
 			continue
 		}
 		if ipv4[0] == 192 && ipv4[1] == 168 {
-			return ipv4.String(), true, nil
+			return ipv4.String(), true
 		}
 		if ip == "" {
 			ip = ipv4.String()
 		}
 	}
 
-	return ip, false, err
+	return ip, false
 }
 
 func addrIP(addr net.Addr) (net.IP, bool) {

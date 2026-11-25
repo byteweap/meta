@@ -44,3 +44,40 @@ func TestExitGameAcknowledgement(t *testing.T) {
 		t.Fatalf("exit acknowledgement header = %v, request header = %v", h, request.Header)
 	}
 }
+
+func TestEnterGameAcknowledgement(t *testing.T) {
+	recorder := &replyRecorder{}
+	request := &envelope.ClientEnvelope{Service: "game", Header: &envelope.Header{Cmd: 1, Version: 1, Seq: 18}}
+	msg := &broker.Message{Header: cluster.BuildHeader(42, cluster.EventBusiness, "gate.reply", "gate", "game")}
+	mesh.Handle(New(nil).EnterGame)(mesh.New(mesh.Broker(recorder)), msg, request)
+
+	if len(recorder.replies) != 1 {
+		t.Fatalf("got %d replies, want one enter acknowledgement", len(recorder.replies))
+	}
+	var reply envelope.ServerEnvelope
+	if err := proto.Unmarshal(recorder.replies[0], &reply); err != nil {
+		t.Fatal(err)
+	}
+	if reply.GetKind() != envelope.MsgType_MSG_TYPE_RESPONSE || reply.GetError() != nil ||
+		len(reply.GetPayload()) != 0 || reply.GetHeader().GetSeq() != request.GetHeader().GetSeq() {
+		t.Fatalf("unexpected enter acknowledgement: %v", &reply)
+	}
+}
+
+func TestHelloAcknowledgement(t *testing.T) {
+	recorder := &replyRecorder{}
+	request := &envelope.ClientEnvelope{Service: "game", Header: &envelope.Header{Seq: 19}}
+	msg := &broker.Message{Header: cluster.BuildHeader(42, cluster.EventBusiness, "gate.reply", "gate", "game")}
+	mesh.Wrap(New(nil).Hello)(mesh.New(mesh.Broker(recorder)), msg, request)
+
+	if len(recorder.replies) != 1 {
+		t.Fatalf("got %d replies, want one hello acknowledgement", len(recorder.replies))
+	}
+	var reply envelope.ServerEnvelope
+	if err := proto.Unmarshal(recorder.replies[0], &reply); err != nil {
+		t.Fatal(err)
+	}
+	if reply.GetError() != nil || reply.GetHeader().GetSeq() != request.GetHeader().GetSeq() {
+		t.Fatalf("unexpected hello acknowledgement: %v", &reply)
+	}
+}

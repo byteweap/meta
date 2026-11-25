@@ -3,25 +3,19 @@ package wos
 import (
 	"os"
 	"runtime"
+	"slices"
 	"syscall"
 	"testing"
 	"time"
 )
 
 func TestGetSignalsForOS(t *testing.T) {
-	signals := getSignalsForOS()
-	if len(signals) == 0 {
-		t.Error("getSignalsForOS() returned empty slice")
-	}
-
-	switch runtime.GOOS {
-	case windowsOS:
-		if len(signals) != 2 {
-			t.Errorf("getSignalsForOS() for windows returned %d signals, want 2", len(signals))
-		}
-	default:
-		if len(signals) != 4 {
-			t.Errorf("getSignalsForOS() for unix returned %d signals, want 4", len(signals))
+	for goos, want := range map[string][]os.Signal{
+		windowsOS: {syscall.SIGINT, syscall.SIGTERM},
+		"linux":   {syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGABRT},
+	} {
+		if got := getSignalsForOS(goos); !slices.Equal(got, want) {
+			t.Errorf("getSignalsForOS(%q) = %v, want %v", goos, got, want)
 		}
 	}
 }

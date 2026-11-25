@@ -229,10 +229,8 @@ func (client *Client) writeLoop() {
 			if limit, ok := request.ctx.Deadline(); ok && limit.Before(deadline) {
 				deadline = limit
 			}
-			if err := client.conn.SetWriteDeadline(deadline); err != nil {
-				_ = client.shutdown(err)
-				return
-			}
+			// Gorilla 的 SetWriteDeadline 只记录截止时间并返回 nil
+			_ = client.conn.SetWriteDeadline(deadline)
 			if err := client.conn.WriteMessage(websocket.BinaryMessage, request.data); err != nil {
 				_ = client.shutdown(err)
 				return

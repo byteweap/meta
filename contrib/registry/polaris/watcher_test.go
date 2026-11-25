@@ -195,3 +195,24 @@ func TestPolarisWatcherParentCancellation(t *testing.T) {
 		t.Fatalf("cancelled initial Next = %v, %v", instances, err)
 	}
 }
+
+func TestPolarisWatcherIgnoresNilChangesAndUnblocksConcurrentReads(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	w, events := newPolarisWatcherForTest(t, ctx)
+	requirePolarisSnapshot(t, w)
+	events <- (*model.InstanceEvent)(nil)
+	close(events)
+	if instances, err := w.Next(); instances != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next returned a snapshot for a nil event: %v, %v", instances, err)
+	}
+
+	blocked, _ := newPolarisWatcherForTest(t, ctx)
+	internal := blocked.(*watcher)
+	internal.next <- struct{}{}
+	defer func() { <-internal.next }()
+	cancel()
+	if snapshot, err := blocked.Next(); snapshot != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("queued Next after cancellation = %v, %v", snapshot, err)
+	}
+}

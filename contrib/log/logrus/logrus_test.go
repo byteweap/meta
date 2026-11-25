@@ -65,3 +65,32 @@ func TestLoggerLog(t *testing.T) {
 		})
 	}
 }
+
+func TestLoggerLogHandlesLevelsAndUnpairedFields(t *testing.T) {
+	for _, tc := range []struct {
+		level log.Level
+		want  string
+	}{
+		{log.LevelWarn, "warning"},
+		{log.LevelError, "error"},
+		{log.Level(100), "debug"},
+	} {
+		output := new(bytes.Buffer)
+		logger := logrus.New()
+		logger.SetLevel(logrus.DebugLevel)
+		logger.SetOutput(output)
+		logger.SetFormatter(&logrus.JSONFormatter{DisableTimestamp: true})
+		wrapped := NewLogger(logger)
+		if err := wrapped.Log(tc.level); err != nil || output.Len() != 0 {
+			t.Fatalf("empty log returned %v and wrote %q", err, output)
+		}
+		if err := wrapped.Log(tc.level, 1, "skipped", "msg", "hello", "unpaired"); err != nil {
+			t.Fatal(err)
+		}
+		got := output.String()
+		if !strings.Contains(got, `"level":"`+tc.want+`"`) || !strings.Contains(got, `"unpaired":""`) ||
+			!strings.Contains(got, `"msg":"hello"`) || strings.Contains(got, "skipped") {
+			t.Fatalf("unexpected log output: %q", got)
+		}
+	}
+}

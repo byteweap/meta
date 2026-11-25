@@ -196,3 +196,34 @@ func TestExtractErrors(t *testing.T) {
 		t.Error("Extract() should return error for empty address with nil listener")
 	}
 }
+
+type addressOnlyListener struct{ net.Listener }
+
+func (addressOnlyListener) Addr() net.Addr {
+	return &net.UnixAddr{Name: "not-tcp", Net: "unix"}
+}
+
+func TestExtractRejectsNonTCPListener(t *testing.T) {
+	if got, err := Extract("127.0.0.1:80", addressOnlyListener{}); got != "" || err == nil {
+		t.Fatalf("Extract with Unix listener = %q, %v; want an error", got, err)
+	}
+}
+
+func TestPrivateIPIgnoresMissingInterface(t *testing.T) {
+	iface := net.Interface{Index: int(^uint(0) >> 1), Flags: net.FlagUp}
+	if ip := ifacePrivateIP(iface, 0, false); ip != nil {
+		t.Fatalf("nonexistent interface returned %v", ip)
+	}
+}
+
+func TestPrivateIPReportsEmptyInterfacesAndLookupErrors(t *testing.T) {
+	if _, _, err := ExtractHostPort("missing-port"); err == nil {
+		t.Fatal("ExtractHostPort accepted a missing port")
+	}
+	if ip, err := extractPrivateIP(func() ([]net.Interface, error) { return nil, nil }); ip != "" || err != nil {
+		t.Fatalf("empty interface enumeration returned %q, %v", ip, err)
+	}
+	if ip, err := extractPrivateIP(func() ([]net.Interface, error) { return nil, net.ErrClosed }); ip != "" || err != net.ErrClosed {
+		t.Fatalf("failed interface enumeration returned %q, %v", ip, err)
+	}
+}

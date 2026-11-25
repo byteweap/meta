@@ -15,9 +15,20 @@ import (
 // Registry 是 zookeeper 注册中心实现
 type Registry struct {
 	opts *options
-	conn *zk.Conn
+	conn connection
 
 	group singleflight.Group
+}
+
+type connection interface {
+	Children(string) ([]string, *zk.Stat, error)
+	ChildrenW(string) ([]string, *zk.Stat, <-chan zk.Event, error)
+	Get(string) ([]byte, *zk.Stat, error)
+	Create(string, []byte, int32, []zk.ACL) (string, error)
+	Delete(string, int32) error
+	Exists(string) (bool, *zk.Stat, error)
+	ExistsW(string) (bool, *zk.Stat, <-chan zk.Event, error)
+	SessionID() int64
 }
 
 var _ registry.Registry = (*Registry)(nil)

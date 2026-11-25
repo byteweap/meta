@@ -262,3 +262,16 @@ func BenchmarkLoggerHelperInfow(b *testing.B) {
 		}
 	})
 }
+
+func TestLoggerHandlesEmptyAndUnpairedFields(t *testing.T) {
+	logger, err := NewLogger("tcp://127.0.0.1:24224")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = logger.Close() })
+	for _, fields := range [][]any{nil, {"unpaired"}} {
+		if err := logger.Log(log.LevelInfo, fields...); err != nil {
+			t.Fatalf("Log(%v) returned %v", fields, err)
+		}
+	}
+}

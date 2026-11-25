@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	redisserver "github.com/alicebob/miniredis/v2/server"
 	goredis "github.com/redis/go-redis/v9"
 
@@ -138,4 +140,44 @@ func TestUnleasedSessionIsOffline(t *testing.T) {
 	l, server := newSessionTestLocator(t)
 	server.HSet(l.key(7), "node:gate", "old-gate", "session:gate", "old-session")
 	assertSession(t, l, 7, "gate", locator.Session{ID: "old-session"})
+}
+
+func TestUnprefixedGateLeaseAndFailurePaths(t *testing.T) {
+	server := miniredis.RunT(t)
+	loc := New(goredis.UniversalOptions{Addrs: []string{server.Addr()}}, "")
+	t.Cleanup(func() { _ = loc.Close() })
+
+	ctx := t.Context()
+	if got := loc.ID(); got != ID {
+		t.Fatalf("locator ID = %q, want %s", got, ID)
+	}
+	if err := loc.AcquireGateLease(ctx, testGateRun, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if !server.Exists("gate-lease:" + testGateRun) {
+		t.Fatal("acquisition did not create the unprefixed lease")
+	}
+	if err := loc.AcquireGateLease(ctx, testGateRun, time.Minute); err == nil {
+		t.Fatal("duplicate lease acquisition succeeded")
+	}
+	if renewed, err := loc.RenewGateLease(ctx, "", time.Minute); renewed || err == nil {
+		t.Fatalf("renewal without a run ID returned %v, %v", renewed, err)
+	}
+	if err := loc.Bind(ctx, 12, "game", "node"); err != nil {
+		t.Fatal(err)
+	}
+	if node := server.HGet("locator:12", "node:game"); node != "node" {
+		t.Fatalf("node was written to an unexpected key: %q", node)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if replaced, err := loc.Claim(canceled, 12, "game", "node", "session", testGateRun); replaced || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled Claim returned %v, %v", replaced, err)
+	}
+	if nodes, err := loc.AllNodes(canceled, 12); nodes != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled AllNodes returned %v, %v", nodes, err)
+	}
+	if err := loc.AcquireGateLease(canceled, "other-run", time.Minute); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled AcquireGateLease returned %v", err)
+	}
 }

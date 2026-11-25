@@ -138,3 +138,29 @@ func TestWRRSelector_Select_WithFilter(t *testing.T) {
 		t.Fatalf("expected node-b, got %v", got.ID())
 	}
 }
+
+func TestFilteredWeightedSequence(t *testing.T) {
+	a := selector.NewNode("a", "svc", "1", nil)
+	b := selector.NewNode("b", "svc", "1", map[string]string{"weight": "2"})
+	c := selector.NewNode("c", "svc", "1", nil)
+	other := selector.NewNode("other", "svc", "1", nil)
+	ws := New()
+	ws.Update([]selector.Node{a, b, c})
+	filter := func(nodes []selector.Node) []selector.Node { return append(nodes[:2], other) }
+	for _, want := range []selector.Node{b, a, b} {
+		got, err := ws.Select("", nil, filter)
+		if err != nil || got != want {
+			t.Fatalf("filtered selection = %v, %v, want %s", got, err, want.ID())
+		}
+	}
+
+	for _, filter := range []selector.Filter{
+		func([]selector.Node) []selector.Node { return nil },
+		func([]selector.Node) []selector.Node { return []selector.Node{other, other} },
+	} {
+		got, err := ws.Select("", filter)
+		if got != nil || !errors.Is(err, selector.ErrNoAvailableNode) {
+			t.Fatalf("all filtered = %v, %v", got, err)
+		}
+	}
+}

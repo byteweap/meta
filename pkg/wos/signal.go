@@ -10,8 +10,8 @@ import (
 const windowsOS = "windows"
 
 // getSignalsForOS 根据操作系统返回需要监听的信号
-func getSignalsForOS() []os.Signal {
-	switch runtime.GOOS {
+func getSignalsForOS(goos string) []os.Signal {
+	switch goos {
 	case windowsOS:
 		// Windows 支持的信号
 		return []os.Signal{syscall.SIGINT, syscall.SIGTERM}
@@ -24,7 +24,7 @@ func getSignalsForOS() []os.Signal {
 // WaitSignal 阻塞直到收到系统信号
 func WaitSignal() {
 	sign := make(chan os.Signal, 1)
-	signal.Notify(sign, getSignalsForOS()...)
+	signal.Notify(sign, getSignalsForOS(runtime.GOOS)...)
 	<-sign
 	signal.Stop(sign)
 }
@@ -33,6 +33,6 @@ func WaitSignal() {
 // 调用者可以自行决定如何处理信号
 func Signal() <-chan os.Signal {
 	sign := make(chan os.Signal, 1)
-	signal.Notify(sign, getSignalsForOS()...)
+	signal.Notify(sign, getSignalsForOS(runtime.GOOS)...)
 	return sign
 }

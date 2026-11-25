@@ -13,9 +13,10 @@ import (
 	"github.com/byteweap/meta/component/log"
 	"github.com/byteweap/meta/contrib/registry/nacos"
 	"github.com/byteweap/meta/examples/game/internal"
+	"github.com/byteweap/meta/examples/game/internal/server"
 )
 
-func newNamingClient() naming_client.INamingClient {
+func newNamingClient(connect func(vo.NacosClientParam) (naming_client.INamingClient, error)) naming_client.INamingClient {
 	clientCfg := constant.ClientConfig{
 		UpdateCacheWhenEmpty: true,
 		// NamespaceId:  "zhaobin",
@@ -28,7 +29,7 @@ func newNamingClient() naming_client.INamingClient {
 			ContextPath: "/nacos",
 		},
 	}
-	nc, err := clients.NewNamingClient(
+	nc, err := connect(
 		vo.NacosClientParam{
 			ClientConfig:  &clientCfg,
 			ServerConfigs: serverCfgs,
@@ -41,25 +42,30 @@ func newNamingClient() naming_client.INamingClient {
 }
 
 func main() {
+	run(clients.NewNamingClient, internal.New, (*meta.App).Run)
+}
+
+func run(connect func(vo.NacosClientParam) (naming_client.INamingClient, error), newGame func() (*server.Server, func(), error), start func(*meta.App) error) {
 	// 1. nacos注册中心
-	nc := newNamingClient()
+	nc := newNamingClient(connect)
 	registry := nacos.New(nc)
 
 	// 2. server [mesh]
-	s, cleanup, err := internal.New()
+	s, cleanup, err := newGame()
 	if err != nil {
 		panic(err)
 	}
 	defer cleanup()
 
-	err = meta.New(
+	app := meta.New(
 		meta.ID(fmt.Sprintf("game-%d", rand.IntN(100))),
 		meta.Name("game"),
 		meta.Version("v1.0.0"),
 		meta.Metadata(map[string]string{"author": "Leo"}),
 		meta.Server(s),
 		meta.Registry(registry),
-	).Run()
+	)
+	err = start(app)
 	if err != nil {
 		log.Info(err)
 	}

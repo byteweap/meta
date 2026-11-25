@@ -127,3 +127,10 @@ func TestSpaceDuplicateRegistrationPreservesSeat(t *testing.T) {
 		requireSeat(t, space, 0, original)
 	}
 }
+
+func TestNewSeatIsUnoccupied(t *testing.T) {
+	value := seat.New(3)
+	if value.ID() != 3 || value.Player() != nil {
+		t.Fatalf("new seat ID=%d player=%v", value.ID(), value.Player())
+	}
+}

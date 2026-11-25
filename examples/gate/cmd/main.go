@@ -23,7 +23,7 @@ import (
 	"github.com/byteweap/meta/server/gate"
 )
 
-func newNamingClient() naming_client.INamingClient {
+func newNamingClient(connect func(vo.NacosClientParam) (naming_client.INamingClient, error)) naming_client.INamingClient {
 	clientCfg := constant.ClientConfig{
 		UpdateCacheWhenEmpty: true,
 		// NamespaceId:  "zhaobin",
@@ -36,7 +36,7 @@ func newNamingClient() naming_client.INamingClient {
 			ContextPath: "/nacos",
 		},
 	}
-	nc, err := clients.NewNamingClient(
+	nc, err := connect(
 		vo.NacosClientParam{
 			ClientConfig:  &clientCfg,
 			ServerConfigs: serverCfgs,
@@ -49,14 +49,20 @@ func newNamingClient() naming_client.INamingClient {
 }
 
 func main() {
+	run(clients.NewNamingClient, nats.New, (*meta.App).Run)
+}
+
+func run(
+	connect func(vo.NacosClientParam) (naming_client.INamingClient, error),
+	connectBroker func(...nats.Option) (*nats.Broker, error),
+	start func(*meta.App) error,
+) {
 	token := os.Getenv("GATE_DEMO_TOKEN")
 	if token == "" {
 		panic("GATE_DEMO_TOKEN is required")
 	}
-	expectedAuth := []byte("Bearer " + token)
-
 	// 1. nacos注册中心
-	reg := nacos.New(newNamingClient())
+	reg := nacos.New(newNamingClient(connect))
 
 	// 2. 定位器
 	loc := redis.New(goredis.UniversalOptions{
@@ -65,13 +71,13 @@ func main() {
 	defer loc.Close()
 
 	// 3. broker
-	broker, err := nats.New()
+	broker, err := connectBroker()
 	if err != nil {
 		panic(err)
 	}
 	defer broker.Close()
 
-	err = meta.New(
+	app := meta.New(
 		meta.ID(fmt.Sprintf("gate-%d", rand.IntN(100))),
 		meta.Name("gate"),
 		meta.Version("v1.0.0"),
@@ -79,12 +85,7 @@ func main() {
 		meta.Server(gate.New(
 			gate.Addr(fmt.Sprintf(":%d", rand.IntN(1000)+8000)),
 			// 单账户演示：验证配置的令牌后使用用户 1，实际业务应验证凭据并返回对应用户 ID。
-			gate.UserIDExtractor(func(r *http.Request) int64 {
-				if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), expectedAuth) != 1 {
-					return 0
-				}
-				return 1
-			}),
+			gate.UserIDExtractor(demoUserIDExtractor(token)),
 			gate.Locator(loc),
 			gate.Discovery(reg),
 			gate.Broker(broker),
@@ -93,8 +94,19 @@ func main() {
 			}),
 		)),
 		meta.Registry(reg),
-	).Run()
+	)
+	err = start(app)
 	if err != nil {
 		log.Errorf("app run error: %v", err)
+	}
+}
+
+func demoUserIDExtractor(token string) func(*http.Request) int64 {
+	expectedAuth := []byte("Bearer " + token)
+	return func(r *http.Request) int64 {
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), expectedAuth) != 1 {
+			return 0
+		}
+		return 1
 	}
 }

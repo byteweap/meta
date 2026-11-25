@@ -155,3 +155,15 @@ func TestParseAddr(t *testing.T) {
 		})
 	}
 }
+
+func TestInvalidAddresses(t *testing.T) {
+	for _, addr := range []string{"missing-port", "[invalid host]:0"} {
+		listen, expose, err := xnet.ParseAddr(addr)
+		if listen != "" || expose != "" || err == nil {
+			t.Errorf("ParseAddr(%q) = %q, %q, %v", addr, listen, expose, err)
+		}
+	}
+	if port, err := xnet.ExtractPort(&net.UnixAddr{Name: "socket", Net: "unix"}); port != 0 || err == nil {
+		t.Errorf("ExtractPort(UnixAddr) = %d, %v; want an error", port, err)
+	}
+}

@@ -45,7 +45,7 @@ func Extract(hostPort string, lis net.Listener) (string, error) {
 		return net.JoinHostPort(addr, port), nil
 	}
 
-	ip, err := extractPrivateIP()
+	ip, err := extractPrivateIP(net.Interfaces)
 	if err != nil {
 		return "", err
 	}
@@ -70,8 +70,8 @@ func isSpecificAddr(addr string) bool {
 	return len(addr) > 0 && addr != "0.0.0.0" && addr != "[::]" && addr != "::"
 }
 
-func extractPrivateIP() (string, error) {
-	ifaces, err := net.Interfaces()
+func extractPrivateIP(interfaces func() ([]net.Interface, error)) (string, error) {
+	ifaces, err := interfaces()
 	if err != nil {
 		return "", err
 	}

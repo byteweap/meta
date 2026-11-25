@@ -16,7 +16,7 @@ var ErrWatcherStopped = errors.New("watcher stopped")
 type watcher struct {
 	ctx    context.Context
 	event  chan zk.Event
-	conn   *zk.Conn
+	conn   connection
 	cancel context.CancelFunc
 
 	first atomic.Bool
@@ -28,7 +28,7 @@ type watcher struct {
 
 var _ registry.Watcher = (*watcher)(nil)
 
-func newWatcher(ctx context.Context, prefix, serviceName string, conn *zk.Conn) (*watcher, error) {
+func newWatcher(ctx context.Context, prefix, serviceName string, conn connection) (*watcher, error) {
 	w := &watcher{conn: conn, event: make(chan zk.Event, 1), prefix: prefix, serviceName: serviceName}
 	w.ctx, w.cancel = context.WithCancel(ctx)
 	go w.watch(w.ctx)

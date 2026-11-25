@@ -116,3 +116,12 @@ func TestRoundRobinSelector_Select_WithFilter(t *testing.T) {
 		t.Fatalf("expected node-b, got %v", got.ID())
 	}
 }
+
+func TestSelectIgnoresNilFilterAndStopsWhenEmpty(t *testing.T) {
+	rr := New()
+	rr.Update([]selector.Node{selector.NewNode("a", "svc", "1", nil)})
+	got, err := rr.Select("", nil, func([]selector.Node) []selector.Node { return nil })
+	if got != nil || !errors.Is(err, selector.ErrNoAvailableNode) {
+		t.Fatalf("all filtered = %v, %v", got, err)
+	}
+}

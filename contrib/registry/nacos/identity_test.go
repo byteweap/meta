@@ -268,3 +268,69 @@ func TestNacosIdentityPropagatesSDKErrors(t *testing.T) {
 		_ = w.Stop()
 	}
 }
+
+type cancelingQueryClient struct {
+	*identityClient
+	cancel context.CancelFunc
+}
+
+func (c cancelingQueryClient) SelectAllInstances(param vo.SelectAllInstancesParam) ([]model.Instance, error) {
+	instances, err := c.identityClient.SelectAllInstances(param)
+	c.cancel()
+	return instances, err
+}
+
+func TestRegistryHandlesInvalidWeightAndCancellation(t *testing.T) {
+	cli := &identityClient{}
+	r := New(cli, WithWeight(12))
+	instance := &registry.ServiceInstance{
+		Name: "game", ID: "app", Endpoints: []string{"grpc://127.0.0.1:9000"},
+		Metadata: map[string]string{"weight": "invalid"},
+	}
+	if r.ID() != "nacos" {
+		t.Fatalf("registry ID = %q", r.ID())
+	}
+	if err := r.Register(t.Context(), instance); err != nil {
+		t.Fatal(err)
+	}
+	if len(cli.registered) != 1 || cli.registered[0].Weight != 12 {
+		t.Fatalf("registration did not use default weight: %v", cli.registered)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if result, err := r.GetService(ctx, "game"); result != nil || !errors.Is(err, context.Canceled) || len(cli.queries) != 0 {
+		t.Fatalf("already canceled lookup returned %v, %v with %d SDK calls", result, err, len(cli.queries))
+	}
+
+	ctx, cancel = context.WithCancel(t.Context())
+	defer cancel()
+	cli.instances = []model.Instance{identityInstance()}
+	r = New(cancelingQueryClient{identityClient: cli, cancel: cancel})
+	if result, err := r.GetService(ctx, "game"); result != nil || !errors.Is(err, context.Canceled) || len(cli.queries) != 1 {
+		t.Fatalf("late canceled lookup returned %v, %v with %d SDK calls", result, err, len(cli.queries))
+	}
+}
+
+func TestDeregisterPropagatesSDKFailure(t *testing.T) {
+	failure := errors.New("deregister rejected")
+	cli := &identityClient{deregister: func(vo.DeregisterInstanceParam) (bool, error) { return false, failure }}
+	r := New(cli)
+	instance := &registry.ServiceInstance{Name: "game", Endpoints: []string{"grpc://127.0.0.1:9000", "grpc://127.0.0.1:9001"}}
+	if err := r.Deregister(t.Context(), instance); !errors.Is(err, failure) || len(cli.deregistered) != 1 {
+		t.Fatalf("Deregister returned %v after %d SDK calls", err, len(cli.deregistered))
+	}
+}
+
+func TestDeregisterRejectsMalformedEndpoints(t *testing.T) {
+	cli := &identityClient{}
+	r := New(cli)
+	for _, endpoint := range []string{"grpc://%", "grpc://127.0.0.1", "grpc://127.0.0.1:999999999999999999999999"} {
+		instance := &registry.ServiceInstance{Name: "game", Endpoints: []string{endpoint}}
+		if err := r.Deregister(t.Context(), instance); err == nil || len(cli.deregistered) != 0 {
+			t.Fatalf("Deregister(%q) returned %v with %d SDK calls", endpoint, err, len(cli.deregistered))
+		}
+		if err := r.Register(t.Context(), &registry.ServiceInstance{Name: "game", ID: "app", Endpoints: []string{endpoint}}); err == nil {
+			t.Fatalf("Register(%q) accepted an invalid endpoint", endpoint)
+		}
+	}
+}

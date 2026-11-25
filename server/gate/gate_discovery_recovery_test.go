@@ -199,7 +199,7 @@ func TestDiscoveryRecoveryWaitsForLateInitialSnapshot(t *testing.T) {
 	require.ErrorIs(t, g.Stop(ctx), context.DeadlineExceeded)
 	unblockSnapshot()
 	awaitBackground(t, w.stopEntered)
-	stopped := stopBackground(g, context.Background())
+	stopped := stopBackground(context.Background(), g)
 	select {
 	case err := <-stopped:
 		t.Fatalf("Stop completed while late watcher cleanup was blocked: %v", err)
@@ -246,14 +246,14 @@ func TestDiscoveryRecoverySharesCloseWithStop(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 			defer cancel()
-			first := stopBackground(g, ctx)
+			first := stopBackground(ctx, g)
 			if !failureFirst {
 				awaitBackground(t, w.stopEntered)
 				w.nextError <- errors.New("watch stream failed")
 			}
 			require.ErrorIs(t, awaitBackground(t, first), context.DeadlineExceeded)
 			require.Equal(t, int32(1), w.stopCalls.Load())
-			second := stopBackground(g, context.Background())
+			second := stopBackground(context.Background(), g)
 			unblock()
 			err = awaitBackground(t, second)
 			require.ErrorIs(t, err, w.stopError)

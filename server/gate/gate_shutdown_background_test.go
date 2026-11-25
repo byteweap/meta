@@ -60,7 +60,7 @@ func awaitBackground[T any](t *testing.T, ch <-chan T) T {
 	}
 }
 
-func stopBackground(g *Gate, ctx context.Context) <-chan error {
+func stopBackground(ctx context.Context, g *Gate) <-chan error {
 	result := make(chan error, 1)
 	go func() { result <- g.Stop(ctx) }()
 	return result
@@ -87,11 +87,11 @@ func TestGateShutdownBackgroundWaitsForSubscriptionClose(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	first := stopBackground(g, ctx)
+	first := stopBackground(ctx, g)
 	awaitBackground(t, entered)
 	require.ErrorIs(t, awaitBackground(t, first), context.DeadlineExceeded)
 
-	second := stopBackground(g, context.Background())
+	second := stopBackground(context.Background(), g)
 	select {
 	case err := <-second:
 		t.Fatalf("repeated Stop returned before subscription close: %v", err)
@@ -152,7 +152,7 @@ func TestGateShutdownBackgroundClosesLateWatcher(t *testing.T) {
 
 	unblockWatch()
 	awaitBackground(t, closeEntered)
-	stopped := stopBackground(g, context.Background())
+	stopped := stopBackground(context.Background(), g)
 	select {
 	case err := <-stopped:
 		t.Fatalf("Stop returned before the late watcher closed: %v", err)
@@ -231,7 +231,7 @@ func TestGateShutdownBackgroundStopsWatchersIndependently(t *testing.T) {
 	require.NoError(t, err)
 	awaitBackground(t, nextA)
 	awaitBackground(t, nextB)
-	stopped := stopBackground(g, context.Background())
+	stopped := stopBackground(context.Background(), g)
 	awaitBackground(t, stopA)
 	awaitBackground(t, stopB) // B must close while A's close operation is still blocked.
 	unblockStopA()

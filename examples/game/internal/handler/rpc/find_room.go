@@ -7,7 +7,7 @@ import (
 	"github.com/byteweap/meta/server/mesh"
 )
 
-// Hello RPC示例接口
-func (h *RpcHandler) Hello(ctx *mesh.RPCContext, req *pb.FindRoomRequest) ([]byte, string, int) {
+// Hello 返回示例 RPC 的固定响应
+func (h *Handler) Hello(_ *mesh.RPCContext, _ *pb.FindRoomRequest) ([]byte, string, int) {
 	return []byte("Hello RPC"), "", http.StatusOK
 }

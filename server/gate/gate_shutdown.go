@@ -51,8 +51,8 @@ func (g *Gate) Stop(ctx context.Context) error {
 
 func (g *Gate) shutdown(ctx context.Context, ln net.Listener, ws *melody.Melody) {
 	var closing sync.WaitGroup
-	closeResource := func(close func() error) {
-		closing.Go(func() { g.addStopError(close()) })
+	closeResource := func(cleanup func() error) {
+		closing.Go(func() { g.addStopError(cleanup()) })
 	}
 	closeResource(func() error {
 		err := g.Shutdown(ctx)

@@ -22,7 +22,6 @@ func NewLogger(logger *zerolog.Logger) log.Logger {
 
 // Log 发送日志
 func (l *Logger) Log(level log.Level, kvs ...any) (err error) {
-
 	var event *zerolog.Event
 
 	if len(kvs) == 0 {

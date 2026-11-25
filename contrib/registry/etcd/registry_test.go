@@ -6,8 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/byteweap/meta/component/registry"
 	"google.golang.org/grpc"
+
+	"github.com/byteweap/meta/component/registry"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 )

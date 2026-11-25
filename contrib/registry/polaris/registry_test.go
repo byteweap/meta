@@ -11,9 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/byteweap/meta/component/registry"
 	"github.com/polarismesh/polaris-go/api"
 	"github.com/polarismesh/polaris-go/pkg/model"
+
+	"github.com/byteweap/meta/component/registry"
 )
 
 type fakePolarisProvider struct {

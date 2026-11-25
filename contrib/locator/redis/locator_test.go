@@ -9,7 +9,6 @@ import (
 
 func TestNormalizeNodeResultRedisNil(t *testing.T) {
 	node, err := normalizeNodeResult("", goredis.Nil)
-
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -20,7 +19,6 @@ func TestNormalizeNodeResultRedisNil(t *testing.T) {
 
 func TestNormalizeNodeResultHit(t *testing.T) {
 	node, err := normalizeNodeResult("node-1", nil)
-
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}

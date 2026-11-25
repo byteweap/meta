@@ -6,8 +6,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/byteweap/meta/component/registry"
 	"github.com/nacos-group/nacos-sdk-go/vo"
+
+	"github.com/byteweap/meta/component/registry"
 )
 
 func TestNacosRegistrationValidatesBeforeSideEffects(t *testing.T) {

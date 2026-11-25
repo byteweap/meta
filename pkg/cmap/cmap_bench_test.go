@@ -31,7 +31,7 @@ func BenchmarkItemsInteger(b *testing.B) {
 
 	// Insert 100 elements.
 	for i := 0; i < 10000; i++ {
-		m.Set((Integer)(i), Animal{strconv.Itoa(i)})
+		m.Set(Integer(i), Animal{strconv.Itoa(i)})
 	}
 	for i := 0; i < b.N; i++ {
 		m.Items()
@@ -46,7 +46,7 @@ func BenchmarkItemsInt(b *testing.B) {
 	m := mustNewMap[uint32, Animal](b, directSharding, DefaultShardCount)
 
 	for i := 0; i < 10000; i++ {
-		m.Set((uint32)(i), Animal{strconv.Itoa(i)})
+		m.Set(uint32(i), Animal{strconv.Itoa(i)})
 	}
 	for i := 0; i < b.N; i++ {
 		m.Items()

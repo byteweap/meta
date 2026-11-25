@@ -6,8 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/byteweap/meta/component/registry"
 	"github.com/go-zookeeper/zk"
+
+	"github.com/byteweap/meta/component/registry"
 )
 
 func TestRegistry_GetService(t *testing.T) {

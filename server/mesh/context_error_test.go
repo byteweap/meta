@@ -70,7 +70,7 @@ func TestContextErrRespPublishesExpectedMessage(t *testing.T) {
 			require.NoError(t, proto.Unmarshal(msg.Data, out))
 			require.Equal(t, int32(code), out.GetError().GetCode())
 			require.Equal(t, tc.message, out.GetError().GetMessage())
-			require.Equal(t, envelope.MsgType_RESPONSE, out.GetKind())
+			require.Equal(t, envelope.MsgType_MSG_TYPE_RESPONSE, out.GetKind())
 			require.Equal(t, "game", out.GetService())
 			require.Equal(t, uint64(7), out.GetHeader().GetSeq())
 			require.Equal(t, uint32(1001), out.GetHeader().GetCmd())
@@ -124,7 +124,7 @@ func TestContextResponseStatus(t *testing.T) {
 			var out envelope.ServerEnvelope
 			require.NoError(t, proto.Unmarshal(bro.messages[0].Data, &out))
 			require.NotNil(t, out.GetHeader())
-			require.Equal(t, envelope.MsgType_RESPONSE, out.GetKind())
+			require.Equal(t, envelope.MsgType_MSG_TYPE_RESPONSE, out.GetKind())
 			require.WithinDuration(t, time.Now(), time.UnixMilli(out.GetHeader().GetSentAtUnixMs()), time.Minute)
 			if tc.success {
 				require.Nil(t, out.GetError())

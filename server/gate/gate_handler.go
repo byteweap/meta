@@ -145,7 +145,7 @@ func (g *Gate) writeDispatchError(s *melody.Session, request *envelope.Header, c
 			SentAtUnixMs: time.Now().UnixMilli(),
 		},
 		Service: g.appName,
-		Kind:    envelope.MsgType_RESPONSE,
+		Kind:    envelope.MsgType_MSG_TYPE_RESPONSE,
 		Error:   &envelope.ResponseError{Code: int32(code), Message: http.StatusText(code)},
 	})
 	if err == nil {

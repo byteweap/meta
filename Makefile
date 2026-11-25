@@ -57,6 +57,4 @@ tidy:
 
 
 envelope:
-	@set -euo pipefail; \
-	mkdir -p envelope; \
-	(cd idl/envelope && protoc --proto_path=. --go_out=paths=source_relative:../../envelope envelope.proto)
+	buf generate --path idl/envelope/v1/envelope.proto

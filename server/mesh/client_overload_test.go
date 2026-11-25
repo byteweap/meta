@@ -87,7 +87,7 @@ func TestClientOverloadRejectsAndPreservesAcceptedOrder(t *testing.T) {
 			require.Equal(t, cluster.DeliveryResponse, msg.Header.Get(cluster.FieldNameDelivery))
 			var response envelope.ServerEnvelope
 			require.NoError(t, proto.Unmarshal(msg.Data, &response))
-			require.Equal(t, envelope.MsgType_RESPONSE, response.GetKind())
+			require.Equal(t, envelope.MsgType_MSG_TYPE_RESPONSE, response.GetKind())
 			require.Equal(t, "game", response.GetService())
 			require.Equal(t, seq, response.GetHeader().GetSeq())
 			require.EqualValues(t, 7, response.GetHeader().GetCmd())

@@ -10,471 +10,431 @@
   <a href="https://goreportcard.com/report/github.com/byteweap/meta"><img src="https://goreportcard.com/badge/github.com/byteweap/meta" alt="Go Report Card"></a>
 </p>
 
-Meta 是一个轻量、可插拔、面向长连接游戏/实时业务的 Go 服务框架。它把网关接入、业务逻辑、服务发现、消息通信、玩家位置定位和节点选择拆成清晰的工程边界，让游戏服可以按服务横向扩展，同时保留足够薄的核心运行时。
+Meta 是面向长连接游戏和实时业务的 Go 服务框架。Gate 接入 WebSocket 客户端，Mesh 执行业务路由和服务间 RPC；注册发现、消息代理、玩家定位、节点选择和日志通过组件接口接入，业务服务可以按服务名部署多个实例。
 
-## 设计目标
+当前核心能力包括：
 
-- **网关轻量化**：`gate` 只处理 WebSocket 连接、会话管理、消息透传和上下线事件，不承载业务逻辑。
-- **业务服务自治**：`mesh` 作为后端逻辑服务运行单元，通过路由注册处理客户端消息、服务间 RPC 和玩家事件。
-- **基础设施可替换**：Broker、Registry、Locator、Selector、Logger 都以接口定义在 `component` 下，具体实现放在 `contrib`。
-- **面向水平扩展**：通过服务注册发现、节点选择器和玩家位置定位器，把用户流量稳定路由到目标服务节点。
-- **保持核心简单**：核心只定义生命周期、通信原语、消息 envelope 和组件边界，限流、分房、匹配、状态同步等策略留给业务层。
+- **客户端请求与推送**：Protobuf 外层协议、类型化请求处理器、按 UID 主动推送，以及支持并发请求的 Go 客户端
+- **动态路由**：按需发现业务服务，维护实例快照；支持玩家绑定路由和服务级无状态路由
+- **会话归属**：连接认领、条件释放、Gate 运行租约，以及绑定原连接的响应投递
+- **服务间 RPC**：定点调用、按服务名选点、截止时间传递，以及可选的固定 worker 并发
+- **运行控制**：就绪后注册、停止排空、客户端队列过载拒绝和请求阶段观测
 
-## 架构概览
+分房、匹配、房间迁移、状态同步和业务限流由业务服务负责。
+
+[架构与目录](#架构与目录) · [运行示例](#运行示例) · [消息协议](#消息协议) · [Gate](#gate) · [Mesh](#mesh) · [生命周期](#生命周期) · [组件与扩展](#组件与扩展) · [开发与验证](#开发与验证) · [升级注意事项](#升级注意事项) · [实现边界](#实现边界)
+
+## 架构与目录
 
 ![Meta 架构总览](assets/architecture.svg)
 
-典型部署中，一个应用进程由 `meta.App` 管理生命周期；进程可以挂载一个或多个 `server.Server` 实例。`gate` 负责客户端入口，`mesh` 负责游戏逻辑或其它后端业务能力。服务实例启动后会注册到 `registry.Registry`，网关通过服务发现监听后端节点变化，并使用 `selector.Selector` 选择目标节点。
+| 层次 | 职责 |
+| --- | --- |
+| `meta.App` | 管理服务启动、就绪、实例注册、钩子和停止清理 |
+| `server/gate` | 验证握手身份，维护连接与会话，发现并转发业务消息，投递响应和推送 |
+| `server/mesh` | 执行客户端路由、会话事件和服务间 RPC，提供主动推送与排空 |
+| `component` | 定义 Broker、Registry、Locator、Selector、Observer 和 Logger 契约 |
+| `contrib` | 对接 NATS、Redis、注册中心和日志设施；按独立 Go module 引入 |
+| 业务服务 | 组合 `*mesh.Mesh`，维护玩家、房间等领域状态及其归属 |
 
-## 目录结构
+一个 App 可以管理多个 `server.Server`，它们共享 App 的 ID、服务名和一次实例注册，不会各自注册为不同业务服务。Gate 和业务 Mesh 通常分别运行在独立进程中；Mesh 的 `mesh://` endpoint 是注册信息，实际服务间通信走 Broker。
 
 ```text
 .
-├── app.go / option.go          # 应用生命周期、全局选项、服务注册与优雅停止
-├── server/                     # 服务运行单元抽象和内置服务
-│   ├── server.go               # Server 接口，统一 Gate/Mesh 生命周期
-│   ├── gate/                   # WebSocket 网关服务
-│   └── mesh/                   # 后端逻辑服务和消息路由
-├── component/                  # 核心组件接口
-│   ├── broker/                 # pub-sub / request-reply 消息代理抽象
-│   ├── registry/               # 服务注册发现抽象
-│   ├── locator/                # 玩家位置定位抽象
-│   ├── selector/               # 节点选择抽象
-│   └── log/                    # 日志抽象
-├── contrib/                    # 可选组件实现，按独立模块组织
-├── encoding/                   # json/proto/msgpack/yaml/toml/xml 编解码器
-├── envelope/                   # 由 idl/envelope/v1 生成的 Protobuf 消息
-├── internal/cluster/           # 集群 subject、header、系统事件定义
-├── pkg/                        # 通用工具包
-├── examples/                   # gate、game、gate-client 示例
-└── cmd/meta/                   # 命令行脚手架入口
+├── app.go / option.go          # 应用生命周期和配置
+├── client/gate/                # WebSocket Go 客户端
+├── server/
+│   ├── server.go               # Server、Drainer 契约
+│   ├── gate/                   # 网关、会话、转发和连接清理
+│   └── mesh/                   # 业务路由、RPC、推送和排空
+├── component/                  # broker、registry、locator、selector、observe、log
+├── contrib/                    # 可选设施适配器，独立模块
+├── idl/envelope/v1/            # 外层 Protobuf 协议源文件
+├── envelope/                   # 生成的 Go 绑定
+├── encoding/                   # proto、json、msgpack、yaml、toml、xml 编解码器
+├── internal/                   # 集群主题与消息头、服务发现缓存、观测保护
+├── pkg/                        # 并发 map、转换、网络地址和异步等工具
+├── examples/                   # gate、game、gate-client，分别为独立模块
+├── cmd/meta/                   # CLI 命令骨架，new/run 尚未实现
+└── docs/                       # 各项变更的需求、设计决策和验证记录
 ```
 
-## 核心生命周期
+## 运行示例
 
-`meta.New(...).Run()` 是应用入口。`App` 的主要职责是把服务实例、基础设施组件和进程生命周期串起来：
+### 环境准备
 
-1. 根据 `ID/Name/Version/Metadata/Endpoint` 构建 `registry.ServiceInstance`。
-2. 执行 `PreStart` 钩子。
-3. 并发启动所有 `server.Server`。
-4. 等待全部服务的 `Ready` 信号后，把实例注册到 `Registry`。
-5. 执行 `PostStart` 钩子。
-6. 运行期间响应 `SIGTERM/SIGQUIT/SIGINT`、父上下文取消或外部 `Stop()`；启动失败也进入同一清理流程。
-7. 停止支持排空的服务接收新请求，使用独立的清理上下文执行 `PreStop`，注销已成功注册的实例。注册失败由注册器回滚已确认取得的资源并返回错误。
-8. 停止所有配置的 server，并等待已启动的 `Start` 返回。
-9. 执行全部 `PostStop` 钩子，合并返回启动和清理错误。任一清理步骤失败都继续执行后续步骤。
+当前根模块、`contrib` 和示例的 `go.mod` 声明 **Go 1.27.1**，独立的 `cmd/meta` 模块声明 Go 1.25.5，开发时以所在模块的声明为准。从仓库检出代码后，示例通过各自 `go.mod` 中的本地 `replace` 使用当前实现，无需先发布或安装框架 CLI。
 
-每个 App 及其服务实例只用于一次运行。`Stop()` 只发出停止请求，可重复调用，也可从钩子中调用；等待 `Run()` 返回才能确认清理结束并取得错误。全部清理步骤共享 `StopTimeout`，默认 10 秒，钩子和自定义服务应遵守传入的上下文截止时间。Endpoint 或启动前钩子失败时，也会停止已配置服务以释放提前分配的资源。
+运行现有 Gate 和 game 示例，需要准备以下本机服务：
 
-服务就绪后，App 通过 `server.Drainer.BeginDrain` 发起排空。排空期间 handler 仍可能访问 Broker、存储等依赖，相关资源应在 `PostStop` 或 `Run()` 返回后关闭。
+| 依赖 | 示例连接地址 | 用途 |
+| --- | --- | --- |
+| Nacos | `127.0.0.1:18848`，ContextPath `/nacos` | 注册发现，默认 group/cluster |
+| Redis | `127.0.0.1:6379` | 玩家位置和 Gate 会话，键前缀 `meta` |
+| NATS | `nats://localhost:4222` | NATS Core 消息通信 |
 
-`server.Server` 是框架运行单元的最小协议：
+示例中的设施地址写在源码中；使用其他地址或认证方式时，需要修改对应初始化配置。这里的 Nacos 端口是 **18848**。完整初始化见 [Gate 入口](examples/gate/cmd/main.go)、[game 入口](examples/game/cmd/main.go)和 [game 组件组装](examples/game/internal/app.go)。
+
+### 启动服务与客户端
+
+以下三个终端都从仓库根目录开始。先在终端一启动 game：
+
+```bash
+cd examples/game
+go run ./cmd
+```
+
+在终端二配置单账户演示令牌并启动 Gate：
+
+```bash
+export GATE_DEMO_TOKEN='replace-with-your-demo-token'
+cd examples/gate
+go run ./cmd
+```
+
+Gate 示例在 **8000–8999** 中随机选择监听端口，以日志中的 `[websocket] server listening on:` 为准。在终端三设置同一令牌，并将下方端口替换为日志中的实际端口：
+
+```bash
+export GATE_DEMO_TOKEN='replace-with-your-demo-token'
+cd examples/gate-client
+go run ./cmd -url ws://127.0.0.1:实际端口/
+```
+
+客户端通过 `Authorization: Bearer <token>` 完成握手，再向 `game` 的 `(cmd=1, version=1)` 发送进入游戏请求，并打印 `ServerEnvelope`。当前 EnterGame/ExitGame 处理器只记录日志并返回空的成功响应；示例中的玩家、房间和座位结构是业务扩展起点，尚未串成完整游戏流程。
+
+演示令牌对应 UID 1，未配置令牌时 Gate 示例直接退出。实际业务应在 `gate.UserIDExtractor` 中验证自己的凭据并返回正数 UID，不能直接信任请求中的 `uid`。示例服务 ID 也采用小范围随机数，部署时应改成唯一实例 ID。
+
+### 接入自己的服务
+
+下面是组装片段：`bro` 实现 `broker.Broker`，`loc` 实现 `locator.SessionLocator`，`reg` 实现 `registry.Registry`，`authenticate` 为业务身份验证函数。它们的创建和错误处理可参考上面的完整示例。
 
 ```go
-type Server interface {
-    Kind() Kind
-    Start(ctx context.Context) error
-    Ready() <-chan struct{}
-    Stop(ctx context.Context) error
-    Endpoint(ctx context.Context) (*url.URL, error)
-}
+g := gate.New(
+    gate.Addr(":9000"),
+    gate.UserIDExtractor(authenticate),
+    gate.Broker(bro),
+    gate.Locator(loc),
+    gate.Discovery(reg),
+    gate.SelectorFunc(func() selector.Selector { return wrr.New() }),
+)
+
+err := meta.New(
+    meta.ID("gate-1"),
+    meta.Name("gate"),
+    meta.Server(g),
+    meta.Registry(reg),
+).Run()
 ```
 
-`Ready` 从构造起返回同一通道，必要初始化和消息订阅生效后关闭；失败时不发送就绪信号。`Start` 持续运行到停止或失败，`Stop` 应允许在启动前或启动期间调用。Gate、Mesh 和业务自定义 server 均遵循这一契约。NATS 的订阅会等待服务端确认后再返回。
+业务服务使用另一个 App，注册自己的服务名，并在启动前注册路由：
 
-## Gate 设计
+```go
+m := mesh.New(mesh.Broker(bro), mesh.Locator(loc))
+m.Route(1, 1, mesh.Handle(EnterGame))
+m.Route(2, 1, mesh.Handle(ExitGame))
+m.RPCRoute("hello", "v1", mesh.WrapRPC(Hello))
 
-`server/gate` 是客户端接入层，基于 `github.com/olahol/melody` 封装 WebSocket 服务。
+err := meta.New(
+    meta.ID("game-1"),
+    meta.Name("game"),
+    meta.Server(m),
+    meta.Registry(reg),
+).Run()
+```
 
-`Gate.Stop(ctx)` 会停止接收新连接和后台任务，关闭现有连接，并等待断开回调、消息循环、订阅及服务监听退出。解绑和下线通知使用独立的清理上下文，每次最多 10 秒；停止后的回调同时受首个 Stop 上下文约束。运行上下文取消不会直接使断开清理失效。
+Gate/Mesh 的 Broker subject 前缀默认都是 `meta`，通信双方需要一致；它与 Redis 定位器构造时的键前缀分别配置。Gate 和 Mesh 必须访问同一份会话存储。App 不负责关闭注入的 Broker、Locator 或 SDK 客户端，资源应在 `Run()` 返回后或 `PostStop` 中关闭。
 
-并发、重复 Stop 共享同一次清理结果，各自用传入的 context 限制等待。超时不会把后台清理标记为完成，后续 Stop 仍可继续等待。组件关闭在锁外独立执行；没有 context 的关闭方法无法被强制终止。WebSocket 管理器在所有已准入请求和断开回调结束后才关闭，避免遗漏升级中的连接。
+## 消息协议
 
-订阅清理等待 `Subscription.Close` 返回，完成语义由组件提供。当前 NATS 适配器的 Close 调用异步 Drain，返回不代表其内部回调已全部结束。
-
-启动时，Gate 会：
-
-- 从 `meta.Context` 中读取应用 ID 和服务名。
-- 校验必需组件：`Locator`、`Broker`、`Discovery`、`SelectorFunc`，以及身份验证函数 `UserIDExtractor`。
-- 监听 TCP 地址并生成 `ws://host:port` endpoint。
-- 注册 Melody 的连接、断开、二进制消息、错误和关闭回调。
-- 订阅自己的 broker subject，用来接收 Mesh 回给客户端的消息。
-
-WebSocket 握手前，Gate 调用显式配置的 `UserIDExtractor` 验证请求凭据。返回正数表示认证用户 ID，非正数返回 HTTP 401，未配置则启动失败。验证函数每次握手仅调用一次，结果直接传入会话；客户端传入的 `uid` 不会被网关自动采用。连接建立后，Gate 会：
-
-- 为本次连接生成新的会话 ID，调用 `SessionLocator.Claim` 原子记录网关节点、连接身份和 Gate 运行 ID。
-- 绑定成功后才替换本地会话、关闭同一用户的旧连接；绑定明确失败则关闭新连接，保留旧连接。
-- 向玩家已绑定的业务节点广播带 `session_id` 的 `online` 或 `reconnect` 事件。
-
-同一网关按用户串行处理连接切换和断开，不阻塞其他用户。断开时，`Release` 只有在节点与会话 ID 都匹配时才释放位置；实际释放成功才发送 `offline`。定位器保留最后会话 ID 及离线状态，Mesh 在处理状态事件前校验当前身份和状态，跳过迟到或过期事件。
-
-每次 Gate 启动用新的运行 ID 建立一份 60 秒租约，所有本地连接共用它。Gate 每 15 秒续期一次。租约到期后，会话查询和 UID 推送将该次运行的会话视为离线。存储明确拒绝续期，或最后一次确认的有效期耗尽时，Gate 启动停止流程。正常释放仍是离线事件的来源。
-
-Gate 和 Mesh 均要求 `locator.SessionLocator`。Redis 定位器的数据格式和状态事件直接更新，不提供历史兼容。跨网关以原子 Claim 的顺序确定归属；本步骤不提供跨网关强制踢线或可靠事件投递。事件校验与业务回调不构成跨系统事务；远端写入成功但响应丢失时，也无法保证失败请求未改变位置。
-
-客户端二进制消息会被解析为 `envelope.ClientEnvelope`：
+[外层协议源文件](idl/envelope/v1/envelope.proto)是客户端消息契约，Protobuf 包名为 `envelope.v1`，Go 导入路径为 `github.com/byteweap/meta/envelope`。Proto 导入以 `idl/` 为根：
 
 ```proto
-message ClientEnvelope {
-  Header header = 1;
-  string service = 2;
-  bytes payload = 3;
-}
+import "envelope/v1/envelope.proto";
 ```
 
-业务服务启动并注册可用实例后，Gate 即可转发客户端请求。新增服务无需修改配置或重启 Gate。Gate 根据请求的 `service` 名和注册中心的实例列表判断可用性，具体 `cmd/version` 由 Mesh 处理。即使服务只注册了 RPC 路由，客户端业务帧也会转发到该服务，由 Mesh 对未知命令回复 404。
+| 消息 | 方向 | 主要字段 |
+| --- | --- | --- |
+| `ClientEnvelope` | 客户端 → Gate → Mesh | 必填 `header`、非空目标 `service`、业务 `payload` |
+| `ServerEnvelope` | Gate/Mesh → 客户端 | 必填 `header`、来源 `service`、`kind`、可选 `error` 和 `payload` |
+| `Header` | 上下行共用 | `seq`、`cmd`、`version`、`sent_at_unix_ms` |
 
-1. Gate 读取请求的 `header` 和 `service`。首次请求按服务名查询注册中心，空结果直接回复 404。同名服务的并发请求共用一次初始化。
-2. 发现可用实例后，Gate 建立监听并再取一次快照，覆盖首次查询与监听建立之间的变化。后续请求直接使用本地快照。实例全部下线或监听失败时，Gate 清除缓存，下次请求重新发现。
-3. 目标服务的全部可用实例都声明无状态时，Gate 直接从本地快照选点，跳过玩家定位。其他服务通过 `locator.Node(ctx, uid, service)` 查询玩家绑定。已绑定时只发给快照中的原实例，绑定失效则回复 503。使用选择器时以 UID 为 key。
-4. Gate 将客户端的原始 Protobuf 帧发往 `<prefix>.<gateName>.<service>.<nodeID>`，并在 Broker 消息头携带 uid、事件类型、回复地址、来源与目标服务，以及读取请求的连接的 `session_id`。
+客户端路由由 `(service, cmd, version)` 决定。业务 payload 是该路由约定的 Protobuf 字节，空 payload 表示没有业务消息体。`kind` 只能使用 `MSG_TYPE_RESPONSE` 或 `MSG_TYPE_PUSH`；成功响应和推送省略 `error`，失败响应带非零 `error.code` 和可选说明。
 
-注册中心查询、监听初始化、定位、选点或发布失败时，Gate 在原 WebSocket 连接上回复 503。Gate 的 404 和 503 均为 `MSG_TYPE_RESPONSE`，来源为 Gate，回填原 `seq/cmd/version`，包括 `seq=0`。组件错误详情记入服务端日志。发布成功后若收不到业务响应，客户端通过请求截止时间结束等待。
+`seq` 关联请求与响应，响应回填原值，0 表示无需关联，推送使用 0。框架不按它排序或去重。`sent_at_unix_ms` 是发送方的 Unix 毫秒时间戳，0 表示未提供，客户端时钟不用于判断消息先后。
 
-当同一服务的任意实例都能处理该服务的请求时，可在 `meta.New` 中传入 `meta.Metadata(map[string]string{registry.MetadataStateless: "true"})`，按需在同一个 map 中提供其他元数据。该声明作用于整个服务，注册中心需保留 `stateless`，Gate 随发现快照更新转发方式。需要玩家绑定的业务使用默认方式，房间归属由业务服务管理。
-
-发现任务的关闭只执行一次，初始化与关闭都纳入 Gate.Stop 等待。旧监听关闭阻塞不会阻止新请求重建，关闭错误会保留在停止结果中。GetService 与 Watch 没有共同的版本协议，因此快照查询和后续通知之间不提供强一致保证。
-
-Mesh 的 `OkResp` / `ErrResp` 在 Broker 头标记 `delivery=response`，并回填请求的 `session_id`。Gate 按 UID 找到本地连接；携带会话 ID 的响应只写入匹配的连接，重连后的新连接不接收旧响应。按 UID 投递给当前连接的推送标记为 `delivery=push`，不携带 `session_id`。Gate 仍原样写出下行字节，不解码 envelope。
-
-滚动升级时默认允许缺少投递标记或会话 ID 的旧响应，此时仍存在旧回包误投风险。先升级 Gate 和 Mesh，迁移自定义发布者，再启用 `gate.StrictSessionDelivery(true)`：自定义响应必须同时设置 `delivery=response` 和原请求的 `session_id`，自定义推送必须设置 `delivery=push`。已有 Broker 适配器须保留这些头。该校验不撤销旧请求的业务操作，也不提供跨网关踢线。详见[迁移与回退](docs/session-reply-isolation/decision.md)。
-
-下行 `ServerEnvelope` 也必须包含 `header`，其 `service` 是来源服务，`kind` 区分 `MSG_TYPE_RESPONSE` 和 `MSG_TYPE_PUSH`。成功响应与推送均省略 `error`；失败响应携带 `error.code`（非零错误码），可附带 `error.message`。业务消息体的选型规则见 [外层协议定义](idl/envelope/v1/envelope.proto)。
-
-`header.seq` 用于请求与响应关联，响应回填原值；`0` 表示无需关联。框架不要求它递增，也不据此排序或去重。`header.sent_at_unix_ms` 是发送方的 Unix 毫秒时间戳，`0` 表示未提供。响应由生成它的 Gate 或 Mesh 填写发送时间，框架不依赖客户端时钟判断消息顺序。
-
-## Mesh 设计
-
-`server/mesh` 是后端逻辑服务。它不直接处理网络连接，而是订阅 broker subject 接收 Gate 或其它服务发来的消息。
-
-Mesh 启动时会校验 `Broker` 和 `Locator`，然后订阅：
+集群元数据放在 Broker 消息头中，包括 `uid`、`event`、`reply`、`from_service`、`to_service`、`session_id` 和 `delivery`。主题格式为：
 
 ```text
-<prefix>.*.<appName>.<appID>
+<prefix>.<fromService>.<toService>.<toNodeID>
+meta.gate.game.game-1
 ```
 
-收到消息后，Mesh 根据 `broker.Message.Reply` 区分两种模式：
+Gate/Mesh 订阅 `<prefix>.*.<appName>.<appID>`。客户端转发和下行响应走 pub-sub，回复地址放在消息头 `reply`；服务间 RPC 走 Broker request-reply，使用 `broker.Message.Reply`。这两种回复地址承担不同职责。
 
-- `Reply == ""`：pub-sub 消息，主要用于 Gate 转发的客户端业务消息和系统事件。
-- `Reply != ""`：request-reply 消息，用于服务间 RPC。
+`meta.Version` 是注册实例版本，客户端的 `header.version` 和 RPC 的字符串 `version` 是业务路由版本，三者分别配置。
 
-Gate/Mesh 在每条 broker 消息的处理入口恢复 panic，记录异常及堆栈后继续处理下一条消息。该边界覆盖当前 goroutine 内的消息处理及 Mesh 系统事件回调；业务自行启动的 goroutine 应设置自己的恢复边界。
+## Gate
 
-### 业务路由
+Gate 基于 Melody 管理 WebSocket，只解析上行外层协议和转发元数据，业务 payload 保持原样，下行帧也不重新解码。
 
-Mesh 校验客户端业务消息包含 `header`，再按 `header.cmd` 和 `header.version` 定位处理器。底层路由键使用 `uint64(cmd)<<32 | uint64(version)`，避免字符串拼接开销。
+### 身份与会话
 
-对有响应的客户端命令，用 `mesh.Handle` 绑定类型化请求和返回值。Gate 提供已认证 UID，Mesh 负责解码、调用和回包。
+Gate 启动需要 `UserIDExtractor`、`SessionLocator`、`Broker`、`Discovery` 和 `SelectorFunc`。身份验证函数在每次握手前调用一次，返回非正数时回复 HTTP 401，成功后 UID 直接进入会话。
+
+连接建立时，Gate 为该连接生成新的会话 ID，用 `SessionLocator.Claim` 记录 Gate 节点、会话 ID 和本次 Gate 运行 ID。认领成功后才替换本地旧连接；明确失败时关闭新连接并保留旧连接。同一网关按 UID 串行切换连接，不阻塞其他用户。
+
+断开时，`Release` 只在节点和会话 ID 都匹配时释放归属，成功释放才发送 `offline`。`online/reconnect/offline` 广播给用户已绑定的业务节点；Mesh 查询当前会话身份和在线状态后再执行事件钩子，跳过过期事件。
+
+每次 Gate 运行共用一份 **60 秒租约，每 15 秒续期**。租约失效后，`Session` 查询和 UID 推送将该次运行的会话视为离线；存储拒绝续期或最后确认的有效期耗尽时，Gate 启动停止流程。租约过期本身不会生成 `offline`，正常释放才是该事件的来源。
+
+### 服务发现与转发
+
+新增业务服务注册可用实例后即可接收客户端请求，无需重启 Gate 或维护公开服务白名单。Gate 根据 `service` 查询实例，`cmd/version` 是否存在由 Mesh 判断。
+
+1. 首次请求查询注册中心；没有可用实例时回复 404。同服务的并发请求共用初始化
+2. 建立监听后再查询一次快照，后续请求使用本地快照；实例清空或监听失败时缓存失效，下次请求重新发现
+3. 全部可用实例均声明 `stateless=true` 时直接选点；否则先查询用户在目标业务服务的绑定。已有绑定只转发到快照中的原实例，绑定实例失效时回复 503；无绑定时调用选择器
+4. 向目标 subject 发布原始客户端帧，携带 UID、原连接会话 ID 和回复地址
+
+无状态声明通过 App 元数据配置，作用于整个服务：
+
+```go
+meta.Metadata(map[string]string{registry.MetadataStateless: "true"})
+```
+
+Gate 选点时把 UID 作为 key，但内置 Random、RoundRobin、WRR 都忽略 key。**选点不会自动建立业务绑定**：有状态业务应自行调用 `Locator.Bind/UnBind` 管理玩家归属。Gate 会话使用 `Claim/Release`，同一服务名不能混用这两组操作。注册发现快照与后续通知没有统一的版本协议，不提供强一致视图。
+
+### 响应投递与错误
+
+Mesh 响应标记 `delivery=response` 并回填原请求的 `session_id`。Gate 仅向身份匹配的本地连接投递；推送标记 `delivery=push`，不带会话 ID，按 UID 投递给当前本地连接。
+
+`gate.StrictSessionDelivery` 默认关闭，兼容缺少标记或会话 ID 的旧发布者；这时旧回包仍可能误投给新连接。所有回包方迁移后应启用严格模式，详见[升级注意事项](#升级注意事项)。
+
+| 场景 | 行为 |
+| --- | --- |
+| 外层 Protobuf 无法解析或缺少 header | 记录日志并丢弃，客户端等待超时 |
+| 服务不存在或当前没有可用实例 | 在原连接回复 404 |
+| 发现、定位、选点或发布失败，或绑定实例已失效 | 在原连接回复 503 |
+| 发布成功后业务未回包 | 客户端按自己的截止时间结束等待 |
+
+Gate 生成的错误响应也回填原 `seq/cmd/version`，包括 `seq=0`，来源服务为 Gate。详细组件错误只记录在服务端。
+
+### 默认配置
+
+| 选项 | 默认值 |
+| --- | --- |
+| `Addr` / `Path` | `:9000` / `/` |
+| `MaxMessageSize` | 2048 字节 |
+| `WriteTimeout` / `PongTimeout` / `PingInterval` | 5 秒 / 60 秒 / 10 秒 |
+| `WebsocketMessageBufferSize` / `BrokerMessageBufferSize` | 各 256 |
+| `StrictSessionDelivery` / `Observer` | 关闭 / nil |
+
+`MessageBufferSize` 可同时设置 WebSocket 和 Broker 缓冲区。完整选项见 [gate/option.go](server/gate/option.go)。
+
+## Mesh
+
+Mesh 启动必须配置 Broker 和 SessionLocator；`Discovery` 和 `SelectorFunc` 仅在使用 `RequestService` 时需要。默认使用容量为 **256** 的串行消息队列，客户端消息、会话事件和入站 RPC 在同一消息循环中执行。
+
+### 客户端路由
+
+有请求、有响应的业务使用 `mesh.Handle`：
 
 ```go
 func EnterGame(ctx context.Context, caller mesh.Caller, req *pb.EnterGameRequest) (*pb.EnterGameResponse, error) {
     return &pb.EnterGameResponse{}, nil
 }
 
-// 在初始化 Mesh 时注册
 m.Route(1, 1, mesh.Handle(EnterGame))
 ```
 
-- 空 payload 传入 nil 请求。返回 `nil, nil` 表示成功且无响应体。响应回填原请求的 `seq/cmd/version` 和 Broker 会话身份，包括 `seq=0` 的请求。
-- 业务可返回 `&mesh.ClientError{Code: 409, Message: "room full"}`，也可用 `%w` 包装。错误码必须非零，提示须为有效 UTF-8。普通错误、无效业务错误、响应体编码失败和类型化处理器 panic 均返回通用 500。
-- 客户端路由不存在时返回 404。框架解码业务 payload 失败时返回 400。错误回包依赖可解析的外层 header 和可用的回复地址。
-- handler 收到的标准 context 随 Mesh 停止而取消。客户端取消等待后，已经发出的请求仍可执行。
+这里的 `pb` 为业务生成的 Protobuf 包。`caller.UID` 来自 Gate 的认证结果，可按值保留。空 payload 传入 nil 请求，`nil, nil` 返回空的成功响应。handler 的标准 context 随 Mesh 执行上下文取消；客户端取消等待不会撤销已经发出的业务操作。
 
-需要单向处理或自行决定回包时机时，使用 `m.Route(cmd, version, mesh.Wrap(fn))`。其 `*mesh.Context` 提供请求元数据和 `OkResp/ErrResp`，handler 结束后归还对象池，异步使用前须调用 `Copy()`。
+业务错误可返回 `&mesh.ClientError{Code: 409, Message: "room full"}`，支持 `%w` 包装。Code 必须非零，Message 必须是有效 UTF-8。普通错误、无效业务错误、编码失败或类型化处理器 panic 返回通用 500；业务 payload 解码失败返回 400，路由不存在返回 404。错误响应依赖可解析的外层 header 和可用回复地址。
 
-旧版 `m.RouteX(cmd, version, fn)` 已移除。若 `fn` 的签名为 `func(*mesh.Context, *T)`，将注册语句替换为 `m.Route(cmd, version, mesh.Wrap(fn))`；若已持有 `mesh.MessageHandler`，直接使用 `m.Route(cmd, version, fn)`。同一个命令和版本重复注册会在注册处 panic。
+需要单向处理或自行控制回包时，使用 `mesh.Wrap`：
 
-### 客户端请求过载保护
+```go
+m.Route(2, 1, mesh.Wrap(func(ctx *mesh.Context, req *pb.ExitGameRequest) {
+    ctx.OkResp()
+}))
+```
 
-默认客户端请求等待串行队列空出位置。通过 `mesh.ClientOverloadRejection(true)` 启用满队列快速拒绝，队列容量由 `mesh.MessageBufferSize` 设置。成功入队的消息按原顺序执行，会话事件和 RPC 沿用各自的准入规则。
+`*mesh.Context` 提供 UID、序号、命令、版本、来源、时间戳及 `OkResp/ErrResp`。对象在 handler 返回后归还池，异步保留必须先 `Copy()`；复制不会延长 Mesh 的运行期限，也不自动保证业务状态并发安全。同一客户端 `cmd/version` 重复注册会 panic。
 
-满队列时记录一次 `QueueFull`。每个 Mesh 提供一个在途回包名额，名额占用时只计数。拿到名额后，Mesh 校验上行帧、UID、原会话 ID 和回复地址，对可回包的请求尝试发送一次 `503`，回填原 `seq/cmd/version`。拒绝回包的上下文期限最多 100 毫秒，开始排空时取消。Broker 决定在途发布何时响应取消。
-
-### 系统事件
-
-Gate 会把用户状态变化广播给玩家已经绑定的业务服务节点。Mesh 内置三个事件钩子：
+### 会话事件与主动推送
 
 ```go
 m.OnlineHandler(func(uid int64) {})
 m.OfflineHandler(func(uid int64) {})
 m.ReconnectHandler(func(uid int64) {})
-```
 
-这些事件使用 broker header 中的 `event` 字段区分，不走业务 `cmd/version` 路由。
-
-### 按 UID 主动推送
-
-Mesh 就绪后，可以向指定 UID 发送业务 Protobuf 消息。下面的 `notice` 是业务消息，命令号为 20，版本为 1。传入 `nil` 可以发送空消息体。
-
-```go
+// Mesh 就绪后，notice 为业务 Protobuf 消息，nil 表示空消息体
 err := m.Push(ctx, uid, 20, 1, notice)
 ```
 
-Mesh 用 UID 和 Gate 的逻辑服务名查询当前会话。默认服务名为 `gate`，自定义名称可在创建 Mesh 时设置 `mesh.GateService("edge")`，对应 Gate 的 `meta.Name("edge")`。Gate 与 Mesh 需要使用同一会话存储和键前缀。
+事件通过 Broker 的 `event` 头区分，不占用业务路由。推送通过 `Session` 定位当前在线 Gate，默认逻辑服务名为 `gate`；自定义 Gate 名称时，用 `mesh.GateService("edge")` 对应 Gate 的 `meta.Name("edge")`。
 
-- 用户没有在线会话时，可用 `errors.Is(err, mesh.ErrUserOffline)` 判断。定位、编码和 Broker 发布错误返回给调用方。
-- 定位或编码耗尽调用预算时，Mesh 跳过发布。调用方主动取消会通知定位器和 Broker，已进入的网络 I/O 何时返回取决于适配器。
-- 返回 `nil` 表示 Broker 适配器接受了发布。使用 NATS 时，此刻消息可能仍在发送缓冲区。客户端收到的 `MSG_TYPE_PUSH` 帧通过 `Pushes()` 分发，`seq` 为 0，来源为 Mesh 服务名。
-- 推送按 UID 投递给目标 Gate 的本地连接。若用户在定位后迁往另一个 Gate，本次推送可能丢失，也可能被仍存在的旧连接收到。下一次推送会重新定位。
+用户离线可用 `errors.Is(err, mesh.ErrUserOffline)` 判断。定位、编码或发布错误返回调用方；返回 nil 仅表示 Broker 接受发布。NATS 此时可能仍在发送缓冲区，不能据此确认客户端已收到。定位后用户迁移 Gate 时，本次推送可能丢失或被旧连接收到。
 
 ### 服务间 RPC
 
-Mesh 还提供 request-reply 能力：
+RPC 使用独立的字符串命令和版本，handler 返回原始字节、提示和状态码：
 
 ```go
+func Hello(ctx *mesh.RPCContext, req *HelloReq) ([]byte, string, int) {
+    return []byte("hello"), "", http.StatusOK
+}
+
 m.RPCRoute("hello", "v1", mesh.WrapRPC(Hello))
 
-func Hello(ctx *mesh.RPCContext, req *HelloReq) ([]byte, string, int) {
-    return data, "ok", http.StatusOK
-}
-```
-
-RPC 路由键为 `cmd.version`。`WrapRPC[T]` 会反序列化请求体并创建 `RPCContext`。handler 通过 `ctx.Context()` 获取标准上下文，传给数据库操作或下一次 `Mesh.Request` 即可沿用剩余时间。直接注册的 `RPCMessageHandler` 从首个参数接收标准上下文。返回值约定为：
-
-- `[]byte`：响应数据。
-- `string`：提示信息。
-- `int`：状态码，`200` 表示成功。
-
-RPC 业务处理器发生 panic 时，框架返回空数据、`500` 和通用提示 `Internal Server Error`，通过现有结果出口回复一次。回复传输本身发生 panic 时记录异常，不重复发送；后续消息仍继续处理。恢复不会撤销处理器已经完成的外部副作用。
-
-调用方为本次 RPC 设置截止时间。
-
-```go
 ctx, cancel := context.WithTimeout(parent, 200*time.Millisecond)
 defer cancel()
-data, tip, code, err := m.Request(ctx, subject, "hello", "v1", payload)
+data, tip, code, err := m.Request(ctx, "meta.game.room.room-1", "hello", "v1", payload)
 ```
 
-配置 Broker 后即可在 Mesh 启动前调用 `Request`。缺少 Broker 时返回 `errors.ErrBrokerRequired`。调用方取消或超时会结束本地等待并返回 Go 错误。主动取消只影响本地等待。跨节点传递绝对截止时间。Mesh 将有效期限以十进制 Unix 毫秒写入 Broker 请求头 `deadline_unix_ms`，向下取整到毫秒，节点时钟应保持同步。没有期限时省略该头，下游沿用自身的 Mesh 上下文。
+`HelloReq` 为业务 Protobuf 类型。`WrapRPC` 解码请求；`RPCContext.Context()` 可传给数据库或下一次 RPC。`RPCRouteX` 仍提供反射签名适配，高频路径使用 `RPCRoute + WrapRPC`。
 
-传输和排队时间计入期限。出队时已过期的请求跳过业务，执行期间到期则通过 `ctx.Done()` 通知 handler。框架在 handler 返回后统一回复，已过期的结果按 504 处理。若截止时间头格式错误或有多个值，Mesh 回复 400。回包有独立的发送期限，排空期间也受停止预算约束。
+`err` 表示调用未取得 RPC 响应，取得响应后还需检查 `code`，200 才表示成功。业务 panic 返回通用 500；非 200 回包不携带业务数据。配置 Broker 后，定点 `Request` 在 Mesh 启动前也可调用。
 
-#### 入站 RPC 并发
-
-默认情况下，Mesh 在同一消息循环中依次处理 RPC、客户端业务消息和会话事件。业务需要等待数据库或下游服务时，可以为该 Mesh 配置固定数量的 RPC worker 和等待队列。
-
-```go
-m := mesh.New(mesh.Broker(bro), mesh.Locator(loc), mesh.RPCConcurrency(2, 16))
-```
-
-此例最多同时执行 2 个 RPC，另有 16 个等待位置。队列满时，订阅回调直接回复 503。队列容量为 0 时，只要还有空闲的 worker 名额就能接收请求，包括 Mesh 刚就绪时。请求排队至过期，出队时回复 504。两种拒绝都跳过业务 handler。
-
-客户端业务消息和会话事件仍在原消息循环内顺序处理。RPC 可以与它们并行，也可以彼此并行。多个 handler 读写同一份玩家或房间状态时，业务须同步访问。
-
-#### 停服排空
-
-App 发起停止时，Mesh 先关闭订阅的接收入口，再完成已入队的消息。RPC 仍遵守 worker 上限和请求自身的截止时间，已接纳的 handler 可继续调用下游。期限耗尽时，Mesh 取消执行与回包，并跳过剩余业务。已经发出的网络操作能否及时返回取决于 handler 和 Broker 是否响应取消。
-
-单独调用 `Mesh.Stop(ctx)` 同样触发排空，传入的截止时间决定首轮预算。首次停止未指定截止时间时使用 10 秒。后续调用可用各自的 context 等待同一次清理。直接取消独立调用 `Mesh.Start` 时传入的上下文会立即取消执行。
-
-#### 按服务名发送
-
-当任一实例都能处理请求时，使用 `RequestService`。例如创建房间时，调用方只需知道目标服务名。下面使用 `contrib/selector/roundrobin` 提供的轮询选择器。
+按服务名选点时，为 Mesh 配置发现和选择器：
 
 ```go
 m := mesh.New(
-    mesh.Broker(bro), mesh.Locator(loc),
+    mesh.Broker(bro),
+    mesh.Locator(loc),
     mesh.Discovery(reg),
     mesh.SelectorFunc(func() selector.Selector { return roundrobin.New() }),
 )
 
-// Mesh 就绪后，由业务传入本次请求的 ctx
+// Mesh 就绪后调用，ctx 覆盖发现、传输、排队和业务执行
 data, tip, code, err := m.RequestService(ctx, "room", "create", "v1", payload)
 ```
 
-首次调用会按服务名建立监听，同名并发调用共享初始化。等待者可以独立取消。最后一个等待者退出时，尚未完成的查询也会收到取消信号。后续请求从本地快照选取一个实例并发送一次，截止时间覆盖发现、传输和业务执行。没有可用实例时可用 `errors.Is(err, selector.ErrNoAvailableNode)` 判断，传输失败直接返回调用方。
+`RequestService` 维护按服务名的发现缓存，以空 key 选点，只发送一次，失败不自动重试。无可用实例可用 `errors.Is(err, selector.ErrNoAvailableNode)` 判断。适合任意实例都能处理的操作；加入已有房间等操作由业务确定归属后定点调用。
 
-源服务名、目标服务名和选中的实例 ID 各占一个 subject 段。Mesh 启动时会拒绝前缀、服务名和实例 ID 中的 `*` 或 `>`。加入已有房间等有状态操作，由业务确定归属实例并通过 `Request` 发往具体 subject。同步嵌套 RPC 应避免循环等待。默认串行模式下，调用链回到正在等待的实例就会阻塞。开启并发后，同一实例的 worker 也可能全部在等待下游。
+每次 RPC 都应设置截止时间。框架将绝对 Unix 毫秒期限写入 `deadline_unix_ms`，节点时钟需要同步。排队时间计入预算，出队已过期时跳过业务并回复 504；执行中到期通知 handler，返回后丢弃结果并按 504 处理。期限头格式错误回复 400。没有期限时沿用 Mesh 上下文；主动取消只结束本地等待，不向远端发送取消消息。RPC 回包使用独立的发送期限，并受停止预算约束。
 
-## 消息与集群协议
+服务名和实例 ID 应使用非空、不含点号、空白或 Broker 通配符的单段名称。`RequestService` 和推送路径会校验主题段，Mesh 启动也会拒绝前缀、服务名或实例 ID 中的 `*`、`>`，避免订阅扩大到其他实例。
 
-框架把业务消息和集群路由信息分开：
+### 并发、过载与故障隔离
 
-- `envelope.ClientEnvelope` 封装上行请求，`envelope.ServerEnvelope` 封装下行响应或推送。
-- `broker.Header`：集群内部元数据，例如 uid、event、reply、fromService、toService。
-- `cluster.Subject`：broker subject 约定。
+| 选项 | 默认行为 | 启用后的行为 |
+| --- | --- | --- |
+| `MessageBufferSize(n)` | 串行队列容量 256 | 设置客户端消息、会话事件和默认串行 RPC 的队列容量 |
+| `ClientOverloadRejection(true)` | 客户端消息等待入队 | 队列满时快速拒绝；每个 Mesh 最多一个在途 503 尝试，预算最多 100 毫秒，其余只计数 |
+| `RPCConcurrency(workers, queueSize)` | `(0, 0)`，RPC 串行执行 | RPC 单独交给固定 worker；执行及等待名额耗尽时回复 503 |
 
-外层 Protobuf 包名为 `envelope.v1`，Go 导入路径仍为 `github.com/byteweap/meta/envelope`。Proto 文件以 `idl` 为导入根，使用 `import "envelope/v1/envelope.proto";`。从旧版升级时，更新 Go 枚举常量和默认 ProtoJSON 枚举字符串，并同步依赖 Protobuf 描述符、全限定名或 `Any` 类型 URL 的代码。普通 Protobuf 二进制帧保持兼容。
+例如 `mesh.RPCConcurrency(2, 16)` 最多执行 2 个 RPC，另有 16 个等待名额；`queueSize=0` 仍可使用 worker 执行名额。负参数、容量溢出或只配置队列会使启动失败。
 
-subject 格式：
+启用 RPC 并发后，RPC 彼此之间、RPC 与客户端处理器和会话事件之间都可能并行，业务需要同步共享玩家或房间状态。客户端过载回包名额已占用或请求缺少有效回包信息时，不保证返回 503，客户端仍须设置超时。同步嵌套 RPC 应避免循环等待，串行消息循环和有限 worker 都可能因此阻塞。
 
-```text
-<prefix>.<fromService>.<toService>.<toNodeID>
-```
+Gate/Mesh 在单条 Broker 消息处理入口恢复 panic 并记录堆栈。类型化客户端处理器和 RPC 业务处理器有对应的 500 回包路径，其他消息处理或传输 panic 不保证回包。业务自行启动的 goroutine 需自行设置恢复边界，恢复不撤销外部副作用。
 
-例如：
+## 生命周期
 
-```text
-meta.gate.game.game-1
-```
+`meta.New(...).Run()` 执行一次完整生命周期：
 
-这种设计让业务 payload 保持稳定，同时允许集群层独立演进路由、事件和 reply 语义。
+1. 根据 App 身份和各 Server 的 endpoint 构建一个注册实例，执行 `PreStart`
+2. 并发启动所有 Server，等待全部 `Ready` 通道关闭后注册，再执行 `PostStart`
+3. 等待退出信号、父 context 取消、`App.Stop()` 或服务退出；启动失败也进入清理流程
+4. 对支持 `server.Drainer` 的服务调用 `BeginDrain`，执行 `PreStop`，注销已成功注册的实例
+5. 停止所有配置的 Server，等待已启动的 `Start` 返回，执行所有 `PostStop`，合并返回错误
 
-## 组件抽象
+App 和内置 Server 实例都只能运行一次。`App.Stop()` 只发出停止请求，可重复调用或在钩子中调用；需要等待 `Run()` 返回才能确认清理完成。`RegistryTimeout` 默认为 10 秒，全部清理共享 `StopTimeout`，默认也为 10 秒。任一步清理失败仍继续执行后续清理。
 
-Meta 的核心组件都以接口形式存在：
+自定义 Server 实现 [server.Server](server/server.go)：`Kind/Start/Ready/Stop/Endpoint`。`Ready` 从构造起返回同一通道，必要初始化和订阅生效后关闭；`Start` 应持续运行到停止或失败；`Stop` 应能清理 Endpoint 提前分配的资源，也能在尚未启动时调用。支持排空时可额外实现 `server.Drainer`。
 
-- `component/broker.Broker`：提供 `Pub/Sub/Request/Reply/Close`，用于服务间消息通信。
-- `component/registry.Registry`：提供 `Register/Deregister/GetService/Watch`，用于服务注册发现。
-- `component/locator.Locator`：维护 `uid -> service -> nodeID`，用于玩家粘性路由；`SessionLocator` 增加 Gate 运行租约、会话认领、条件释放和在线状态查询，供 Gate/Mesh 处理连接归属和状态事件。
-- `component/selector.Selector`：根据服务实例列表选择目标节点，支持过滤器扩展。
-- `component/observe.Observer`：可选的请求阶段耗时与框架拒绝回调。
-- `component/log.Logger`：统一日志门面，允许替换为 zap/logrus/zerolog 等实现。
-- `encoding.Codec`：统一编解码器注册和查找，内置 json、proto、msgpack、yaml、toml、xml。
+- **Mesh**：停止接纳新消息，在预算内完成已入队工作，RPC 继续遵守并发上限与请求期限；预算耗尽时取消执行和回包。已接纳 handler 在排空期间仍可访问依赖，故依赖应在 `PostStop` 或 `Run()` 返回后关闭
+- **Gate**：停止新连接，关闭现有连接，等待断开回调、消息循环、订阅和发现任务退出；解绑使用独立清理 context，每次最多 10 秒，停止后的回调还受首次 Stop context 约束
 
-`contrib` 提供官方可选实现：
+重复 `Gate.Stop(ctx)` 和 `Mesh.Stop(ctx)` 等待同一次清理，各次调用的 context 限制自己的等待；超时不代表后台工作已终止。Mesh 首次独立 Stop 未给期限时使用 10 秒预算；直接取消独立 `Mesh.Start` 的 context 会立即取消执行。无法响应 context 的 handler 或 SDK 调用可能超出停止预算。
 
-- Broker：NATS。
-- Locator：Redis。
-- Registry：Nacos、Consul、Etcd、Eureka、Polaris、ServiceComb、Zookeeper。
-- Selector：Random、RoundRobin、Weighted RoundRobin。
-- Logger：Zap、Logrus、Zerolog、Aliyun、Tencent、Fluent。
+## 组件与扩展
 
-这些实现通常以独立 Go module 组织，业务可以只引入实际需要的基础设施依赖。
+| 契约 | 作用 | 仓库内实现 |
+| --- | --- | --- |
+| [broker.Broker](component/broker/broker.go) | Pub/Sub/Request/Reply/Close | [NATS Core](contrib/broker/nats) |
+| [registry.Registry](component/registry/registry.go) | 注册、注销、查询、监听 | [Nacos](contrib/registry/nacos)、[Consul](contrib/registry/consul)、[Etcd](contrib/registry/etcd)、[Eureka](contrib/registry/eureka)、[Polaris](contrib/registry/polaris)、[ServiceComb](contrib/registry/servicecomb)、[ZooKeeper](contrib/registry/zookeeper) |
+| [locator.SessionLocator](component/locator/locator.go) | 业务绑定、Gate 运行租约和会话归属 | [Redis](contrib/locator/redis) |
+| [selector.Selector](component/selector/selector.go) | 按快照选点，可附加过滤器 | [加权随机](contrib/selector/random)、[轮询](contrib/selector/roundrobin)、[平滑加权轮询](contrib/selector/wrr) |
+| [observe.Observer](component/observe/observe.go) | 阶段耗时和框架拒绝事件 | 业务实现并通过 Gate/Mesh 的 `Observer` 注入 |
+| [log.Logger](component/log/log.go) | 结构化日志、Helper、Valuer 和 Filter | 标准日志、[Zap](contrib/log/zap)、[Logrus](contrib/log/logrus)、[Zerolog](contrib/log/zerolog)、[Aliyun](contrib/log/aliyun)、[Tencent](contrib/log/tencent)、[Fluent](contrib/log/fluent) |
+| [encoding.Codec](encoding/encoding.go) | 编解码器注册与查找 | proto、json、msgpack、yaml、toml、xml |
 
-### 请求链路观测
+业务只需引入使用的 `contrib` 模块。新增设施适配器放在 `contrib/<component>/<provider>`，核心不直接依赖 provider SDK。编码器在导入各子包时注册；现有 Gate/Mesh 消息链路固定使用 Protobuf，注册其他 Codec 不会自动切换传输格式。
 
-实现 `observe.Observer` 后，通过 `gate.Observer(obs)` 和 `mesh.Observer(obs)` 注入。默认关闭。回调在请求路径上同步调用，可能并发，适合直接记录到线程安全的直方图和计数器。框架会记录回调的 panic 并继续处理请求。
+内置选择器构造函数均为 `New()`，支持并发访问。加权选择器读取实例 metadata 的 `weight`，非正权重按 1 处理；这与注册中心是否将实例认定为可路由是两层规则。自定义注册中心应保留 App 实例 ID、原服务名和业务元数据，特别是 `stateless`；Nacos 使用 metadata 中的 `id` 还原 App ID，不能用 Nacos 自身 InstanceId 代替。
 
-| 阶段 | 计时范围 |
+Broker 成功订阅应表示服务端订阅已生效。NATS 适配器为此执行 Flush；Pub/Reply 成功表示接受发布，Subscription.Close 和 Broker.Close 调用异步 Drain，返回不表示所有回调或缓冲消息都已处理完成。NATS Core 适配器不提供持久化、离线补发或端到端确认。注册中心的 SDK 超时、心跳和监听释放能力也各不相同，App 的清理预算不能强制终止无 context 的 SDK 调用。
+
+业务服务可像 [game Server](examples/game/internal/server/server.go) 一样组合 `*mesh.Mesh` 并持有领域状态。工具包中的 [cmap](pkg/cmap/README.md) 使用 `New(hash, shardCount)` 显式构造，分片配置固定在实例上；跨分片遍历不保证原子快照。
+
+### 请求观测
+
+`gate.Observer(obs)` / `mesh.Observer(obs)` 默认不启用。回调在请求路径同步执行，可能并发，应快速返回并支持并发；框架保护并记录其 panic。
+
+| 阶段 | 测量范围 |
 | --- | --- |
-| `Routing` | Gate 从查找服务到选出目标，包含发现、定位和选择，止于 Broker 发布前 |
-| `Queue` | Mesh 从尝试入队到取出消息，串行队列满时包含等待入队的时间 |
-| `Handler` | Mesh 执行已注册的业务处理器。客户端处理器内同步发送的回包也计入这个阶段 |
-| `Reply` | Mesh 向 Broker 提交客户端响应或 RPC 回包，止于 Broker 调用返回 |
+| `Routing` | Gate 查找服务、定位、选择目标，止于 Broker 发布前 |
+| `Queue` | Mesh 尝试入队到出队，包含默认满队列等待时间 |
+| `Handler` | 执行业务处理器；客户端处理器同步回包也计入 |
+| `Reply` | Mesh 向 Broker 提交客户端响应或 RPC 回包，止于适配器返回 |
 
-拒绝原因包括 Gate 选点或转发失败（`Unavailable`）、Mesh 客户端队列或 RPC 执行与排队名额用尽（`QueueFull`）、Mesh 判定 RPC 截止时间已到（`DeadlineExceeded`），以及停服期间拒收或丢弃尚未执行的请求（`Stopping`）。计数以框架决策为准。会话事件、主动推送和出站 RPC 不参与观测。
+框架拒绝原因包括 `Unavailable`、`QueueFull`、`DeadlineExceeded` 和 `Stopping`；业务自行返回的错误码不会触发拒绝计数。会话事件、主动推送和出站 RPC 不参与这些观测，阶段耗时也不等于客户端端到端延迟。
 
-## 快速示例
+### Go 客户端
 
-### 启动 Gate
+[client/gate](client/gate/client.go) 的 `Dial(ctx, url, header, options...)` 建立单条 WebSocket 连接，ctx 仅控制握手；连接后的生命周期由 `Close` 和网络状态控制。
 
-下面使用环境变量 `GATE_DEMO_TOKEN` 配置单个演示账户的访问令牌，客户端通过 `Authorization: Bearer <token>` 提交凭据，验证成功后使用用户 ID 1。令牌必须显式设置，无内置默认值。实际业务应在 `UserIDExtractor` 中验证自己的凭据并返回对应用户 ID，不能直接使用请求中的 `uid`。示例需使用标准库 `crypto/subtle`、`net/http` 和 `os`。
+- `Request(ctx, service, cmd, version, payload)` 支持并发，自动分配 seq 并匹配响应。Go error 表示未取得响应，业务失败须检查 `response.GetError()`
+- `Pushes()` 独立接收推送，缓冲为 32 条；消费不及时会丢弃新推送，不阻塞响应分发
+- 默认同进程跨连接继续递增 seq。只有所有 Gate 开启严格投递且发布者完成迁移后，才可用 `WithConnectionSequence()` 让每条连接从 1 开始
+- 断线后由调用方重新 Dial 并同步业务状态，不自动重连或重放请求。取消等待不保证已发送请求没有执行
 
-```go
-token := os.Getenv("GATE_DEMO_TOKEN")
-if token == "" {
-    panic("GATE_DEMO_TOKEN is required")
-}
-expectedAuth := []byte("Bearer " + token)
+## 开发与验证
 
-reg := nacos.New(newNamingClient())
-loc := redis.New(goredis.UniversalOptions{
-    Addrs: []string{"127.0.0.1:6379"},
-}, "meta")
-bro, _ := nats.New()
-
-err := meta.New(
-    meta.ID("gate-1"),
-    meta.Name("gate"),
-    meta.Version("v1.0.0"),
-    meta.Server(gate.New(
-        gate.Addr(":9000"),
-        gate.UserIDExtractor(func(r *http.Request) int64 {
-            if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), expectedAuth) != 1 {
-                return 0
-            }
-            return 1
-        }),
-        gate.Locator(loc),
-        gate.Discovery(reg),
-        gate.Broker(bro),
-        gate.SelectorFunc(func() selector.Selector {
-            return wrr.New()
-        }),
-    )),
-    meta.Registry(reg),
-).Run()
-```
-
-### 启动 Mesh
-
-```go
-type GameServer struct {
-    *mesh.Mesh
-}
-
-srv := &GameServer{
-    Mesh: mesh.New(
-        mesh.Broker(bro),
-        mesh.Locator(loc),
-    ),
-}
-
-srv.Route(1, 1, mesh.Handle(EnterGame))
-srv.Route(2, 1, mesh.Handle(ExitGame))
-srv.RPCRoute("hello", "v1", mesh.WrapRPC(Hello))
-
-err := meta.New(
-    meta.ID("game-1"),
-    meta.Name("game"),
-    meta.Version("v1.0.0"),
-    meta.Server(srv),
-    meta.Registry(reg),
-).Run()
-```
-
-更多完整代码可以参考：
-
-- `examples/gate`
-- `examples/game`
-- `examples/gate-client`
-
-Go 客户端 `client/gate` 支持并发请求，按 `seq` 匹配响应，使用调用方的上下文取消等待；`Pushes()` 单独接收推送，消费不及且队列满时丢弃新推送。默认同进程重连继续使用递增序号；仅在所有 Gate 启用严格会话投递且回包方均已迁移后，才可用 `WithConnectionSequence()` 让每条连接从 1 开始。断开后由调用方重新连接并重新同步业务状态，客户端不自动重放请求。
-
-启动 Gate 和 game 示例后，在 `examples/gate-client` 运行 `go run ./cmd -url ws://127.0.0.1:<gate-port>/`，并配置与 Gate 相同的 `GATE_DEMO_TOKEN`。
-
-## 工程扩展建议
-
-新增业务服务时，推荐继承组合 `*mesh.Mesh`，再把领域状态放在自己的 server 结构体中。例如 `examples/game/internal/server.Server` 把 `roomSpace` 和 `playerSpace` 放在 Mesh 外层，业务 handler 通过自定义 server 访问领域对象。
-
-新增基础设施适配时，建议放在 `contrib/<component>/<provider>` 下，并实现 `component` 中对应接口。核心包不依赖任何具体 provider，这样可以避免把业务项目不需要的 SDK 带进主模块。
-
-服务间 RPC 的热点路径可用 `RPCRoute + mesh.WrapRPC` 直接调用业务函数。`RPCRouteX` 支持通过反射适配 RPC 函数签名。
-
-如果 handler 内需要异步处理，请复制 `mesh.Context`：
-
-```go
-func EnterGame(ctx *mesh.Context, req *EnterGameReq) {
-    copied := ctx.Copy()
-    go func() {
-        _ = copied.UID()
-    }()
-}
-```
-
-## 开发命令
+从仓库根目录运行：
 
 ```bash
-make check                  # 逐模块构建整个项目，使用只读依赖模式
-make test                   # 运行所有测试
-make tidy                   # 整理所有 Go module
-buf generate                # 重新生成外层协议和游戏示例的 Go 绑定
-make envelope               # 只重新生成外层协议的 Go 绑定
-make -C examples/game proto # 只重新生成游戏示例的 Go 绑定
-buf lint                    # 按 STANDARD 规则检查两个协议模块
+make check                  # 逐个构建所有 Go 模块，-mod=readonly
+make test                   # 等价于 go test -v ./...，仅根模块
+golangci-lint run ./...      # 根模块静态检查，需先安装兼容的 golangci-lint v2
+make lint                   # 同上；缺失时尝试自动安装，命令见下方说明
+make tidy                   # 先嵌套模块、后根模块执行 go mod tidy
+buf lint                    # 两个协议模块，STANDARD 规则
 buf build                   # 编译两个协议模块
-make lint                   # 运行 golangci-lint
+buf generate                # 生成外层协议和游戏示例绑定
+make envelope               # 只生成外层协议绑定
+make -C examples/game proto # 只生成游戏示例绑定
+git diff --check            # 检查补丁空白问题
 ```
 
-从仓库根目录运行上述 Buf 命令。`idl/` 和 `examples/game/proto/` 都按 `STANDARD` 规则检查。[Buf workspace](buf.yaml)
+仓库没有 Go workspace，根目录的 `go test ./...` 和 lint 不会覆盖嵌套模块。修改适配器、CLI 或示例时，需要在受影响模块中分别运行测试和 lint；跨模块变更另运行 `make check`。Go 代码修改需 gofmt，并通过 `go test -cover` 核对每个受影响包的语句覆盖率严格大于 95%，完整验收要求见 [AGENTS.md](AGENTS.md)。
 
-游戏示例使用 `game.v1`，IDL 路径以 `game/v1/` 开头，Go 绑定仍位于 `examples/game/internal/pb/`。从旧版升级时，依赖 Protobuf 全限定名、`Any` 类型 URL 或描述符文件路径的代码需更新。普通 Protobuf 二进制消息保持兼容。[事件协议](examples/game/proto/game/v1/event.proto) · [RPC 协议](examples/game/proto/game/v1/rpc.proto)
+`.golangci.yml` 使用 v2 配置；当前 Makefile 的缺失安装分支仍调用不带 `/v2` 的旧模块路径，因此应先准备兼容版本的 golangci-lint。`make check` 只构建，不代替模块测试或实际设施联调。
 
-旧 Proto 导入路径 `event.proto`、`rpc.proto` 分别改为 `game/v1/event.proto`、`game/v1/rpc.proto`。直接引用 Go 描述符变量的代码也需将 `File_event_proto`、`File_rpc_proto` 分别更新为 `File_game_v1_event_proto`、`File_game_v1_rpc_proto`。
+Buf 的 [workspace](buf.yaml) 包含 `idl/` 和 `examples/game/proto/`，[生成模板](buf.gen.yaml) 共用远端 Go 插件。生成绑定需要 Buf CLI 和 `buf.build` 网络访问，协议描述会发送给远端插件；lint/build 可在本地运行。变更外层协议后运行 `make envelope` 并检查生成差异。
 
-三个生成命令共用 [生成模板](buf.gen.yaml)。生成需要安装 Buf CLI，并将协议描述发送到 `buf.build`，调用 Buf Schema Registry 上最新的 Go 插件。Lint 和协议编译可在本地运行。
+依赖整理也可使用 `./tidy.sh` 或 Windows 的 `./tidy.ps1`。`release.sh <version>` / `release.ps1 <version>` 会改写依赖版本、提交、推送并为模块打标签；当前 Makefile 没有可用的 `make release` 目标。发布流程为 `dev` 合入 `master` 后从 `master` 打标签，任务分支的 PR 以 `dev` 为目标。
 
-Windows 环境也提供了对应脚本：
+## 升级注意事项
 
-```powershell
-.\tidy.ps1
-.\release.ps1
-```
+- **客户端处理器**：旧 `RouteX` 已移除。`func(*mesh.Context, *T)` 改用 `Route(cmd, version, mesh.Wrap(fn))`；有标准请求/返回值的业务使用 `mesh.Handle`。直接持有 `MessageHandler` 时传给 `Route`。服务间 `RPCRouteX` 仍保留
+- **会话存储**：Gate/Mesh 现在要求 `SessionLocator`。Redis 字段和状态事件格式已更新，不兼容旧数据格式，升级需协调定位器、Gate、Mesh 及自定义事件发布者，见[会话归属](docs/session-ownership/decision.md)和[运行租约](docs/gate-session-expiry/decision.md)
+- **响应隔离**：先升级 Gate/Mesh，再迁移自定义发布者：响应必须设置 `delivery=response` 并复制原 `session_id`，推送使用 `delivery=push` 且不带会话 ID；Broker 适配器必须保留这些头。完成后启用 `gate.StrictSessionDelivery(true)`，见[迁移与回退](docs/session-reply-isolation/decision.md)
+- **Protobuf 命名**：外层包为 `envelope.v1`，Proto 导入路径为 `envelope/v1/envelope.proto`；游戏示例包为 `game.v1`，导入路径为 `game/v1/event.proto` 和 `game/v1/rpc.proto`。Go 绑定目录未变，普通二进制帧兼容，但枚举常量、默认 ProtoJSON 枚举字符串、描述符变量、全限定名和 `Any` 类型 URL 的引用需要同步，见[外层协议记录](docs/envelope-contract/progress.md)
+- **并发 map**：全局 `ShardCount` 和单参数构造已移除，使用 `cmap.New(hash, shardCount)` 并处理返回错误，见 [cmap 文档](pkg/cmap/README.md)
 
-## 当前实现边界
+更多设计和验证依据见[应用生命周期](docs/application-lifecycle/decision.md)、[动态发现](docs/gate-discovery/decision.md)、[无状态路由](docs/gate-stateless-routing/decision.md)、[RPC 并发](docs/mesh-rpc-concurrency/requirements.md)、[停服排空](docs/mesh-request-drain/decision.md)和[观测契约](docs/request-observability/requirements.md)。这些记录的历史验证结果以各自记录的范围为准。
 
-- Gate 文本消息处理仍为预留接口，当前业务链路使用二进制 protobuf envelope。
-- Gate 的 request-reply 暂未实现，收到带 reply 的请求会返回 `501 Not Implemented`。
-- `mesh.Context.Broadcast` 仍是 TODO。
-- Broker 层刻意不内置并发、背压、限流、消息合并等业务策略，这些能力应按具体游戏场景放在 Gate、Mesh 或业务服务中实现。
+## 实现边界
+
+- Gate 当前业务入口只处理二进制 Protobuf 帧，文本消息回调仍为空
+- Gate 收到 Broker request-reply 请求回复 501；客户端请求通过 pub-sub 转发到 Mesh
+- `mesh.Context.Broadcast` 尚未实现，按 UID 推送使用 `Mesh.Push`
+- 会话归属不等于跨网关强制踢线。旧网关连接可能仍存活，响应隔离也不会撤销旧请求已产生的业务操作
+- 会话事件不提供可靠投递，状态校验与业务回调不构成跨系统事务。远端写入成功但响应丢失时，调用失败不代表位置没有改变
+- 框架不提供房间归属迁移、请求重试/去重、业务状态恢复或完整游戏逻辑；这些需要业务自行设计
+- `cmd/meta new` 和 `cmd/meta run` 仅有命令定义，目前不会生成项目或启动服务
+
+本项目采用 [Apache License 2.0](LICENSE)。

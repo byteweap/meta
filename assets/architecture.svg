@@ -30,7 +30,7 @@
   <!-- App 生命周期带: x=40, y=600, w=700, h=52 -->
   <rect x="40" y="600" width="700" height="52" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="6,4"/>
   <text x="50" y="615" font-size="11" font-weight="600" fill="#334155">meta.App 应用生命周期 (app.go / option.go) · Gate / Mesh 进程统一托管</text>
-  <text x="50" y="637" font-size="10" fill="#64748b">PreStart → 并发启动 Servers → 注册 Registry → 监听信号 / Stop() → PreStop → 注销实例 → 优雅停止 Servers → PostStop</text>
+  <text x="50" y="637" font-size="10" fill="#64748b">PreStart → 启动 / Ready → 注册 → 等待停止 → 排空 / PreStop → 注销 → Stop → PostStop</text>
 
   <!-- ======== 中层: 连接线与箭头 ======== -->
   <!-- 客户端 ⇄ 网关 (每客户端一对上下行) -->
@@ -86,12 +86,12 @@
   <text x="325" y="211" font-size="11" font-weight="600" fill="#1e40af" text-anchor="middle">Gate · gate-2</text>
   <text x="325" y="229" font-size="10" fill="#1e40af" text-anchor="middle">接入节点</text>
   <text x="420" y="221" font-size="12" fill="#94a3b8" text-anchor="middle">…</text>
-  <text x="240" y="266" font-size="10" fill="#64748b" text-anchor="middle">会话管理 · 单用户单网关 · 消息透传 · 上下线事件</text>
+  <text x="240" y="266" font-size="10" fill="#64748b" text-anchor="middle">身份验证 · 会话归属 · 消息透传 · 上下线事件</text>
 
   <!-- Broker 总线 -->
   <rect x="40" y="336" width="400" height="52" rx="8" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
   <text x="240" y="356" font-size="12" font-weight="600" fill="#b45309" text-anchor="middle">Broker 消息总线 · NATS</text>
-  <text x="240" y="374" font-size="10" fill="#b45309" text-anchor="middle">subject: &lt;prefix&gt;.&lt;fromApp&gt;.&lt;toApp&gt;.&lt;nodeID&gt;</text>
+  <text x="240" y="374" font-size="10" fill="#b45309" text-anchor="middle">subject: &lt;prefix&gt;.&lt;fromService&gt;.&lt;toService&gt;.&lt;nodeID&gt;</text>
 
   <!-- Mesh 实例 -->
   <rect x="65" y="454" width="140" height="54" rx="8" fill="#d1fae5" stroke="#22c55e" stroke-width="1.5"/>
@@ -101,7 +101,7 @@
   <text x="295" y="475" font-size="11" font-weight="600" fill="#166534" text-anchor="middle">Mesh · game-2</text>
   <text x="295" y="493" font-size="10" fill="#166534" text-anchor="middle">业务节点</text>
   <text x="383" y="485" font-size="12" fill="#94a3b8" text-anchor="middle">…</text>
-  <text x="240" y="530" font-size="10" fill="#64748b" text-anchor="middle">cmd / version 路由 · 事件钩子 · 服务间 RPC</text>
+  <text x="240" y="530" font-size="10" fill="#64748b" text-anchor="middle">cmd / version 路由 · 事件钩子 · RPC · UID 推送</text>
   <text x="240" y="548" font-size="10" fill="#64748b" text-anchor="middle">Locator 粘性路由：玩家消息直达绑定节点</text>
 
   <!-- 基础设施面板内容 -->
@@ -122,5 +122,5 @@
   <text x="640" y="439" font-size="10" fill="#64748b" text-anchor="middle">Zap · Logrus · Zerolog …</text>
 
   <!-- 底部支撑层注脚 -->
-  <text x="390" y="678" font-size="10" fill="#94a3b8" text-anchor="middle">支撑层：envelope 协议 (protobuf) · cluster 集群路由 · encoding 编解码 · pkg 工具库 · cmd 脚手架 / examples 示例</text>
+  <text x="390" y="678" font-size="10" fill="#94a3b8" text-anchor="middle">支撑层：envelope 协议 (protobuf) · cluster 集群路由 · encoding 编解码 · pkg 工具库 · cmd 命令骨架 / examples 示例</text>
 </svg>
